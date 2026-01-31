@@ -1,0 +1,28 @@
+{
+  "id": "guardspine",
+  "name": "GuardSpine Governance",
+  "version": "1.0.0",
+  "description": "Deny-by-default governance layer for OpenClaw. Gates all dangerous tool calls (bash, file write, download) through L0-L4 risk tiers with evidence packs, council review, and remote approval.",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "enforcement_mode": {
+        "type": "string",
+        "enum": ["enforce", "audit", "disabled"],
+        "default": "audit",
+        "description": "enforce = block unauthorized actions, audit = log but allow, disabled = no checks"
+      },
+      "council_endpoint": {
+        "type": "string",
+        "default": "http://localhost:11434",
+        "description": "Ollama endpoint for council models"
+      },
+      "guardspine_root": {
+        "type": "string",
+        "default": "D:\\Projects\\GuardSpine",
+        "description": "Path to GuardSpine monorepo"
+      }
+    }
+  }
+}

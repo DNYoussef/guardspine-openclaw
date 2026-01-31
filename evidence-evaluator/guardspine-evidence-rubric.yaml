@@ -1,0 +1,566 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# GUARDSPINE L3 COUNCIL RUBRIC: Evidence Pack Evaluation
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Define how the 3-model council evaluates rlm-docsync evidence packs
+# Scope: Security audits (Mode 1), Introspection (Mode 2), Context reads (Mode 3)
+# Models: qwen3:8b-q4_K_M (A), falcon3:7b (B), mistral:7b-instruct-q4_K_M (C)
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+rubric:
+  id: "guardspine-evidence-v1"
+  version: "1.0.0"
+  
+  # ─────────────────────────────────────────────────────────────────────────
+  # EVALUATION DIMENSIONS
+  # ─────────────────────────────────────────────────────────────────────────
+  #
+  # Each dimension is scored 0-5 by each auditor.
+  # Final score = weighted average across all auditors.
+  # Dimension weights sum to 1.0.
+  #
+  dimensions:
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # 1. EVIDENCE COMPLETENESS
+    # ═══════════════════════════════════════════════════════════════════════
+    #
+    # Does the evidence pack contain sufficient proof for each claim?
+    #
+    evidence_completeness:
+      weight: 0.25
+      description: "Evidence addresses all claims in manifest"
+      
+      scoring:
+        5: "Every claim has ≥2 independent evidence sources with exact citations"
+        4: "Every claim has ≥1 evidence source with exact citations"
+        3: "Most claims (≥80%) have evidence, some citations imprecise"
+        2: "Many claims (50-80%) have evidence, citations incomplete"
+        1: "Few claims (<50%) have evidence"
+        0: "Evidence pack is empty or malformed"
+      
+      hard_fail_conditions:
+        - "Any CRITICAL severity claim has zero evidence"
+        - "Evidence pack schema validation fails"
+        - "Hash chain broken or missing"
+      
+      auditor_focus:
+        A: "Verify claim coverage is complete"
+        B: "Check for missing edge cases in evidence scope"
+        C: "Validate evidence format compliance"
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 2. EVIDENCE PRECISION
+    # ═══════════════════════════════════════════════════════════════════════
+    #
+    # Are evidence pointers exact and verifiable?
+    #
+    evidence_precision:
+      weight: 0.20
+      description: "Evidence references are specific and reproducible"
+      
+      scoring:
+        5: "All pointers include file:line:col, content hash matches, reproducible"
+        4: "All pointers include file:line, content hash matches"
+        3: "Pointers include file:line but some hashes stale/missing"
+        2: "Pointers are file-level only (no line numbers)"
+        1: "Pointers are vague or pattern-based only"
+        0: "No verifiable pointers"
+      
+      hard_fail_conditions:
+        - "Content hash mismatch on any CRITICAL evidence"
+        - "File path does not exist for any cited evidence"
+      
+      auditor_focus:
+        A: "Spot-check 3 random evidence hashes for validity"
+        B: "Verify line number accuracy on code evidence"
+        C: "Check for stale references (file modified after evidence collection)"
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 3. REASONING VALIDITY
+    # ═══════════════════════════════════════════════════════════════════════
+    #
+    # Does the evidence actually support the claim?
+    #
+    reasoning_validity:
+      weight: 0.25
+      description: "Logical connection between evidence and claim is sound"
+      
+      scoring:
+        5: "Evidence directly proves/disproves claim with no logical gaps"
+        4: "Evidence strongly supports claim with minor inferential steps"
+        3: "Evidence supports claim but requires reasonable assumptions"
+        2: "Evidence is tangentially related, significant inference required"
+        1: "Evidence does not logically connect to claim"
+        0: "Evidence contradicts claim or is irrelevant"
+      
+      hard_fail_conditions:
+        - "Claim marked PASS but evidence shows violations"
+        - "Claim marked FAIL but evidence shows compliance"
+        - "Circular reasoning (claim cites itself as evidence)"
+      
+      auditor_focus:
+        A: "Evaluate logical chain from evidence to conclusion"
+        B: "Check for mathematical/logical errors in reasoning"
+        C: "Identify unstated assumptions or hidden dependencies"
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 4. NEGATIVE PROOF RIGOR
+    # ═══════════════════════════════════════════════════════════════════════
+    #
+    # For "zero_matches" claims, was the search exhaustive?
+    #
+    negative_proof_rigor:
+      weight: 0.15
+      description: "Absence claims are backed by exhaustive search evidence"
+      
+      scoring:
+        5: "Search covered 100% of scope, multiple patterns, results logged"
+        4: "Search covered 100% of scope, single pattern, results logged"
+        3: "Search covered ≥95% of scope, exclusions documented"
+        2: "Search covered ≥80% of scope, some gaps unexplained"
+        1: "Search coverage unclear or incomplete"
+        0: "No search evidence for negative claim"
+      
+      hard_fail_conditions:
+        - "Negative claim on CRITICAL issue with <100% scope coverage"
+        - "Search excluded directories that could contain violations"
+      
+      auditor_focus:
+        A: "Verify scope definition matches claim intent"
+        B: "Check for regex/pattern escape errors that could miss matches"
+        C: "Validate exclusion list is appropriate (no suspicious omissions)"
+      
+      applies_to:
+        - claims with "expect: zero_matches"
+        - claims asserting absence ("no X exists", "X never occurs")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 5. CHAIN INTEGRITY
+    # ═══════════════════════════════════════════════════════════════════════
+    #
+    # Is the hash chain valid and tamper-evident?
+    #
+    chain_integrity:
+      weight: 0.15
+      description: "Cryptographic hash chain is valid and continuous"
+      
+      scoring:
+        5: "All hashes valid, chain unbroken, timestamps monotonic, signed"
+        4: "All hashes valid, chain unbroken, timestamps monotonic"
+        3: "All hashes valid, chain unbroken, minor timestamp issues"
+        2: "Some hashes invalid but chain recoverable"
+        1: "Chain broken but individual evidence hashes valid"
+        0: "Hash chain missing or fundamentally broken"
+      
+      hard_fail_conditions:
+        - "Any hash mismatch in chain"
+        - "Evidence pack modified after initial hash"
+        - "Timestamp goes backwards in chain"
+      
+      auditor_focus:
+        A: "Verify hash algorithm is SHA-256"
+        B: "Recompute 3 random hashes to confirm validity"
+        C: "Check chain links previous_hash correctly"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # AGGREGATION RULES
+  # ─────────────────────────────────────────────────────────────────────────
+  
+  aggregation:
+    # How individual auditor scores combine
+    method: "weighted_mean"
+    
+    # Auditor weights (expertise-based)
+    auditor_weights:
+      A: 0.40  # qwen3 - primary reasoning
+      B: 0.35  # falcon3 - technical verification
+      C: 0.25  # mistral - policy baseline
+    
+    # Confidence calculation
+    confidence:
+      high: "All auditors within 1 point on all dimensions"
+      medium: "All auditors within 2 points on all dimensions"
+      low: "Any dimension has >2 point spread"
+    
+    # Verdict thresholds
+    verdict:
+      PASS:
+        min_score: 4.0
+        requires: "No hard_fail_conditions triggered"
+      
+      CONDITIONAL_PASS:
+        min_score: 3.0
+        max_score: 3.99
+        requires: "No CRITICAL hard_fail_conditions"
+        action: "Log warnings, allow with monitoring"
+      
+      FAIL:
+        condition: "Score < 3.0 OR any hard_fail_condition triggered"
+        action: "Block action, require remediation"
+      
+      ESCALATE:
+        condition: "Confidence is LOW or auditors disagree on verdict"
+        action: "Route to L4 (human review)"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # MODE-SPECIFIC OVERRIDES
+  # ─────────────────────────────────────────────────────────────────────────
+  
+  mode_overrides:
+    
+    # Mode 1: Security Audit (External Repos)
+    security_audit:
+      weight_adjustments:
+        negative_proof_rigor: 0.25  # +0.10 (security requires exhaustive search)
+        evidence_completeness: 0.20  # -0.05
+      
+      additional_checks:
+        - name: "severity_appropriate"
+          description: "Findings are classified at correct severity"
+          hard_fail: "CRITICAL finding classified as LOW/MEDIUM"
+        
+        - name: "false_positive_rate"
+          description: "Evidence pack includes FP analysis"
+          scoring_impact: "-1 if no FP discussion on findings"
+      
+      escalation_triggers:
+        - "Any CRITICAL finding"
+        - "≥3 HIGH findings"
+        - "Novel attack pattern detected"
+    
+    # Mode 2: Introspection (Self-Governance)
+    introspection:
+      weight_adjustments:
+        chain_integrity: 0.25  # +0.10 (self-audit must be tamper-proof)
+        reasoning_validity: 0.20  # -0.05
+      
+      additional_checks:
+        - name: "self_reference_valid"
+          description: "Introspection doesn't audit stale version of itself"
+          hard_fail: "Manifest hash doesn't match current GuardSpine"
+        
+        - name: "governance_coverage"
+          description: "All L2+ code paths are covered by claims"
+          hard_fail: "Uncovered governance code path detected"
+      
+      verdict_override:
+        # Introspection failures are ALWAYS blocking
+        FAIL:
+          action: "BLOCK all L2+ actions until resolved"
+          notification: "CRITICAL: Governance integrity compromised"
+    
+    # Mode 3: Context Reader (General Tool)
+    context_reader:
+      weight_adjustments:
+        negative_proof_rigor: 0.05  # -0.10 (reading doesn't need exhaustive proof)
+        evidence_precision: 0.25  # +0.05 (citations matter for readers)
+      
+      additional_checks:
+        - name: "citation_accuracy"
+          description: "Quoted content matches source"
+          scoring_impact: "-2 per misquoted citation"
+        
+        - name: "scope_appropriate"
+          description: "RLM didn't over-read (cost efficiency)"
+          scoring_impact: "-1 if tokens_processed > 10x necessary"
+      
+      # Context reading is lower stakes
+      verdict:
+        PASS:
+          min_score: 3.5  # Lower threshold
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # AUDITOR PROMPTS
+  # ─────────────────────────────────────────────────────────────────────────
+  #
+  # Actual prompts sent to each council member during evaluation.
+  #
+  auditor_prompts:
+    
+    system_prefix: |
+      You are a GuardSpine auditor evaluating an rlm-docsync evidence pack.
+      
+      Your task: Score the evidence pack on specific dimensions.
+      Your output: JSON with scores and reasoning.
+      
+      CRITICAL RULES:
+      - Score each dimension 0-5 based on the rubric criteria
+      - Check for hard_fail_conditions FIRST
+      - If ANY hard_fail triggers, overall verdict is FAIL regardless of scores
+      - Be precise and cite specific evidence pack entries in your reasoning
+      - Do not hallucinate evidence that isn't in the pack
+    
+    # Model A: Primary reasoning / completeness focus
+    auditor_A: |
+      {{system_prefix}}
+      
+      YOUR ROLE: Primary Evaluator (Auditor A)
+      YOUR FOCUS: Evidence completeness, logical validity, overall assessment
+      
+      You are the lead auditor. Your scores carry the most weight.
+      Be thorough but fair. Look for:
+      - Does every claim have supporting evidence?
+      - Is the logical chain from evidence to conclusion sound?
+      - Are there any obvious gaps or oversights?
+      
+      EVIDENCE PACK:
+      ```json
+      {{evidence_pack}}
+      ```
+      
+      RUBRIC:
+      ```yaml
+      {{rubric_dimensions}}
+      ```
+      
+      Respond with:
+      ```json
+      {
+        "hard_fail_triggered": [list of triggered conditions or empty],
+        "scores": {
+          "evidence_completeness": {"score": N, "reasoning": "..."},
+          "evidence_precision": {"score": N, "reasoning": "..."},
+          "reasoning_validity": {"score": N, "reasoning": "..."},
+          "negative_proof_rigor": {"score": N, "reasoning": "..."},
+          "chain_integrity": {"score": N, "reasoning": "..."}
+        },
+        "overall_assessment": "...",
+        "recommended_verdict": "PASS|CONDITIONAL_PASS|FAIL|ESCALATE"
+      }
+      ```
+    
+    # Model B: Technical verification / adversarial checking
+    auditor_B: |
+      {{system_prefix}}
+      
+      YOUR ROLE: Technical Verifier (Auditor B)
+      YOUR FOCUS: Precision, negative proofs, mathematical/logical correctness
+      
+      You are the adversarial auditor. Your job is to find flaws.
+      Be skeptical. Look for:
+      - Are the evidence pointers actually correct? (spot-check 3)
+      - Could the search patterns miss violations? (regex escaping, etc.)
+      - Is there circular reasoning or hidden assumptions?
+      
+      EVIDENCE PACK:
+      ```json
+      {{evidence_pack}}
+      ```
+      
+      RUBRIC:
+      ```yaml
+      {{rubric_dimensions}}
+      ```
+      
+      Respond with:
+      ```json
+      {
+        "hard_fail_triggered": [list of triggered conditions or empty],
+        "scores": {
+          "evidence_completeness": {"score": N, "reasoning": "..."},
+          "evidence_precision": {"score": N, "reasoning": "..."},
+          "reasoning_validity": {"score": N, "reasoning": "..."},
+          "negative_proof_rigor": {"score": N, "reasoning": "..."},
+          "chain_integrity": {"score": N, "reasoning": "..."}
+        },
+        "technical_concerns": ["list of specific technical issues found"],
+        "recommended_verdict": "PASS|CONDITIONAL_PASS|FAIL|ESCALATE"
+      }
+      ```
+    
+    # Model C: Policy compliance / baseline checking
+    auditor_C: |
+      {{system_prefix}}
+      
+      YOUR ROLE: Policy Auditor (Auditor C)
+      YOUR FOCUS: Format compliance, chain integrity, policy alignment
+      
+      You are the compliance auditor. Your job is to verify process was followed.
+      Be procedural. Look for:
+      - Does the evidence pack conform to the expected schema?
+      - Is the hash chain valid and unbroken?
+      - Are there any suspicious exclusions or omissions?
+      
+      EVIDENCE PACK:
+      ```json
+      {{evidence_pack}}
+      ```
+      
+      RUBRIC:
+      ```yaml
+      {{rubric_dimensions}}
+      ```
+      
+      Respond with:
+      ```json
+      {
+        "hard_fail_triggered": [list of triggered conditions or empty],
+        "scores": {
+          "evidence_completeness": {"score": N, "reasoning": "..."},
+          "evidence_precision": {"score": N, "reasoning": "..."},
+          "reasoning_validity": {"score": N, "reasoning": "..."},
+          "negative_proof_rigor": {"score": N, "reasoning": "..."},
+          "chain_integrity": {"score": N, "reasoning": "..."}
+        },
+        "compliance_issues": ["list of format/process violations"],
+        "recommended_verdict": "PASS|CONDITIONAL_PASS|FAIL|ESCALATE"
+      }
+      ```
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # AGGREGATION IMPLEMENTATION
+  # ─────────────────────────────────────────────────────────────────────────
+  
+  aggregation_logic: |
+    def aggregate_verdicts(auditor_results: list[dict]) -> dict:
+        """
+        Deterministic verdict aggregation for 3-model council.
+        
+        Rules (in order):
+        1. ANY hard_fail → FAIL
+        2. ANY FAIL verdict → FAIL
+        3. ANY ESCALATE verdict → ESCALATE
+        4. Confidence LOW → ESCALATE
+        5. Weighted score calculation → threshold verdict
+        """
+        
+        # Rule 1: Hard fails are absolute
+        all_hard_fails = []
+        for r in auditor_results:
+            all_hard_fails.extend(r.get("hard_fail_triggered", []))
+        
+        if all_hard_fails:
+            return {
+                "verdict": "FAIL",
+                "reason": f"Hard fail conditions: {all_hard_fails}",
+                "confidence": "HIGH",
+                "blocking": True
+            }
+        
+        # Rule 2: Any FAIL verdict
+        verdicts = [r["recommended_verdict"] for r in auditor_results]
+        if "FAIL" in verdicts:
+            return {
+                "verdict": "FAIL",
+                "reason": f"Auditor(s) recommended FAIL",
+                "confidence": "HIGH" if verdicts.count("FAIL") >= 2 else "MEDIUM",
+                "blocking": True
+            }
+        
+        # Rule 3: Any ESCALATE verdict
+        if "ESCALATE" in verdicts:
+            return {
+                "verdict": "ESCALATE",
+                "reason": "Auditor(s) recommended escalation",
+                "confidence": "LOW",
+                "blocking": False,
+                "route_to": "L4"
+            }
+        
+        # Rule 4: Calculate confidence from score spread
+        dimension_spreads = calculate_spreads(auditor_results)
+        max_spread = max(dimension_spreads.values())
+        
+        if max_spread > 2:
+            return {
+                "verdict": "ESCALATE",
+                "reason": f"Low confidence: {max_spread} point spread on {max_spread_dim}",
+                "confidence": "LOW",
+                "route_to": "L4"
+            }
+        
+        # Rule 5: Weighted score calculation
+        weights = {"A": 0.40, "B": 0.35, "C": 0.25}
+        dimension_weights = {
+            "evidence_completeness": 0.25,
+            "evidence_precision": 0.20,
+            "reasoning_validity": 0.25,
+            "negative_proof_rigor": 0.15,
+            "chain_integrity": 0.15
+        }
+        
+        final_score = 0
+        for auditor, weight in weights.items():
+            for dim, dim_weight in dimension_weights.items():
+                score = auditor_results[auditor]["scores"][dim]["score"]
+                final_score += score * weight * dim_weight
+        
+        # Threshold verdicts
+        confidence = "HIGH" if max_spread <= 1 else "MEDIUM"
+        
+        if final_score >= 4.0:
+            return {"verdict": "PASS", "score": final_score, "confidence": confidence}
+        elif final_score >= 3.0:
+            return {"verdict": "CONDITIONAL_PASS", "score": final_score, "confidence": confidence}
+        else:
+            return {"verdict": "FAIL", "score": final_score, "confidence": confidence, "blocking": True}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # EVIDENCE PACK SCHEMA
+  # ─────────────────────────────────────────────────────────────────────────
+  #
+  # What an evidence pack must contain to be evaluable by this rubric.
+  #
+  evidence_pack_schema:
+    required_fields:
+      - id: "Unique pack identifier (gs-<timestamp>-<hash>)"
+      - timestamp: "ISO8601 creation time"
+      - manifest_hash: "SHA-256 of source manifest"
+      - mode: "security_audit | introspection | context_read"
+      - claims: "Array of claim results"
+      - hash_chain: "Array of chained evidence entries"
+      - final_hash: "Root hash of entire pack"
+    
+    claim_result_schema:
+      required:
+        - claim_id: "Matches manifest claim ID"
+        - claim_text: "Human-readable claim"
+        - status: "pass | fail | skip"
+        - severity: "critical | high | medium | low"
+        - evidence: "Array of evidence entries"
+      optional:
+        - notes: "Auditor notes"
+        - false_positive_analysis: "For findings"
+    
+    evidence_entry_schema:
+      required:
+        - type: "code | file | pattern | trace"
+        - source: "File path or tool name"
+        - content_hash: "SHA-256 of cited content"
+        - pointer: "Exact location (file:line:col or equivalent)"
+      optional:
+        - snippet: "Relevant content excerpt (≤500 chars)"
+        - derivation: "How this evidence was obtained"
+    
+    hash_chain_entry_schema:
+      required:
+        - index: "Sequential position in chain"
+        - entry_hash: "SHA-256 of this entry's content"
+        - previous_hash: "Hash of previous entry (null for first)"
+        - timestamp: "When this entry was added"
+        - content_type: "claim_result | evidence | metadata"
+
+---
+# IMPLEMENTATION NOTES
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 1. This rubric is loaded by GuardSpine at startup
+# 2. When an evidence pack arrives, it's evaluated against this rubric
+# 3. Each auditor (A/B/C) receives the pack + relevant rubric sections
+# 4. Auditors run SEQUENTIALLY (VRAM constraint)
+# 5. Results are aggregated deterministically
+# 6. Final verdict routes to appropriate action
+#
+# Execution order:
+#   1. Validate evidence_pack_schema (fail fast on malformed)
+#   2. Check mode_overrides for this pack's mode
+#   3. Run Auditor C first (fastest, catches format issues)
+#   4. If C finds hard_fail, skip A and B
+#   5. Run Auditor A
+#   6. Run Auditor B
+#   7. Aggregate results
+#   8. Return verdict + evidence
+#
+# ═══════════════════════════════════════════════════════════════════════════

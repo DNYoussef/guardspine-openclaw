@@ -1,0 +1,12 @@
+node_modules/
+*.log
+guardspine-logs/
+redteam/results/
+redteam/reports/
+redteam/evidence/
+redteam/regression/
+redteam/patches/
+redteam/vulnerabilities.json
+__pycache__/
+*.pyc
+.env

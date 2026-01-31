@@ -1,0 +1,130 @@
+{
+  "id": "gs-20260130-fail-example",
+  "timestamp": "2026-01-30T19:00:00Z",
+  "manifest_hash": "sha256:deadbeef",
+  "mode": "security_audit",
+  "source": {
+    "type": "repository",
+    "path": "/path/to/external/repo",
+    "commit": "xyz789"
+  },
+  "claims": [
+    {
+      "claim_id": "SEC-SQLI-001",
+      "claim_text": "No raw SQL string concatenation",
+      "status": "fail",
+      "severity": "critical",
+      "evidence": [
+        {
+          "type": "code",
+          "source": "/path/to/external/repo/src/db/queries.py",
+          "pointer": "queries.py:45:12",
+          "content_hash": "sha256:vuln_hash_1",
+          "snippet": "cursor.execute(f\"SELECT * FROM users WHERE id = {user_id}\")",
+          "derivation": "regex search for execute\\([^)]*\\+"
+        },
+        {
+          "type": "code",
+          "source": "/path/to/external/repo/src/api/search.py",
+          "pointer": "search.py:112:8",
+          "content_hash": "sha256:vuln_hash_2",
+          "snippet": "query = \"SELECT * FROM products WHERE name LIKE '%\" + search_term + \"%'\"",
+          "derivation": "regex search for execute\\([^)]*\\+"
+        }
+      ],
+      "false_positive_analysis": null
+    },
+    {
+      "claim_id": "SEC-AUTH-001",
+      "claim_text": "All API endpoints require authentication",
+      "status": "fail",
+      "severity": "critical",
+      "evidence": [
+        {
+          "type": "code",
+          "source": "/path/to/external/repo/src/api/public.py",
+          "pointer": "public.py:23:1",
+          "content_hash": "sha256:noauth_hash",
+          "snippet": "@app.get(\"/api/users/{user_id}\")\ndef get_user(user_id: int):\n    return db.get_user(user_id)",
+          "derivation": "endpoint without @requires_auth decorator"
+        }
+      ],
+      "notes": "3 of 47 endpoints missing authentication"
+    },
+    {
+      "claim_id": "SEC-SECRETS-001",
+      "claim_text": "No hardcoded credentials",
+      "status": "pass",
+      "severity": "critical",
+      "evidence": [
+        {
+          "type": "pattern",
+          "source": "/path/to/external/repo/**/*",
+          "pointer": "N/A",
+          "content_hash": "sha256:clean_search",
+          "snippet": "0 matches found",
+          "derivation": "regex search for hardcoded secrets pattern",
+          "search_scope": {
+            "files_searched": 156,
+            "lines_searched": 45892,
+            "exclusions": ["**/test/**", "**/mock/**"],
+            "coverage_percentage": 100
+          }
+        }
+      ]
+    }
+  ],
+  "hash_chain": [
+    {
+      "index": 0,
+      "entry_hash": "sha256:fail_chain_0",
+      "previous_hash": null,
+      "timestamp": "2026-01-30T19:00:01Z",
+      "content_type": "metadata"
+    },
+    {
+      "index": 1,
+      "entry_hash": "sha256:fail_chain_1",
+      "previous_hash": "sha256:fail_chain_0",
+      "timestamp": "2026-01-30T19:00:02Z",
+      "content_type": "claim_result"
+    },
+    {
+      "index": 2,
+      "entry_hash": "sha256:fail_chain_2",
+      "previous_hash": "sha256:fail_chain_1",
+      "timestamp": "2026-01-30T19:00:03Z",
+      "content_type": "claim_result"
+    },
+    {
+      "index": 3,
+      "entry_hash": "sha256:fail_chain_3",
+      "previous_hash": "sha256:fail_chain_2",
+      "timestamp": "2026-01-30T19:00:04Z",
+      "content_type": "claim_result"
+    }
+  ],
+  "final_hash": "sha256:fail_chain_3",
+  "statistics": {
+    "total_claims": 3,
+    "passed": 1,
+    "failed": 2,
+    "skipped": 0,
+    "critical_claims": 3,
+    "critical_passed": 1,
+    "findings": [
+      {
+        "claim_id": "SEC-SQLI-001",
+        "severity": "critical",
+        "count": 2,
+        "recommendation": "Use parameterized queries"
+      },
+      {
+        "claim_id": "SEC-AUTH-001",
+        "severity": "critical",
+        "count": 3,
+        "recommendation": "Add @requires_auth decorator to all endpoints"
+      }
+    ]
+  }
+}

@@ -1,0 +1,627 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# OpenClaw Plugin Manifest: rlm-docsync
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# This manifest integrates rlm-docsync into MoltBot/GuardSpine as a
+# proof-carrying cognition layer. Every tool invocation produces an
+# evidence pack that must pass the L3 rubric before execution proceeds.
+#
+# Three modes:
+#   1. security_audit   - Scan external codebases for vulnerabilities
+#   2. introspection    - Self-verify governance integrity
+#   3. context_read     - Read large documents/repos with proof trails
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+plugin:
+  name: "rlm-docsync"
+  version: "1.0.0"
+  description: "Proof-carrying cognition: 10M+ token context with hash-chained evidence"
+  author: "David Youssef"
+  license: "Apache-2.0"
+  
+  # Plugin capabilities
+  capabilities:
+    - "infinite_context"      # RLM-based context virtualization
+    - "evidence_packs"        # Hash-chained proof generation
+    - "self_audit"            # Introspection mode
+    - "security_scanning"     # Vulnerability detection
+  
+  # Required dependencies
+  dependencies:
+    python: ">=3.10"
+    packages:
+      - "pyyaml>=6.0"
+      - "requests>=2.28"
+    ollama_models:
+      - "qwen3:8b-q4_K_M"
+      - "falcon3:7b"
+      - "mistral:7b-instruct-q4_K_M"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUARDSPINE INTEGRATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+guardspine:
+  # Evidence pack evaluation is MANDATORY for all rlm-docsync operations
+  evidence_required: true
+  rubric_path: "guardspine-evidence-rubric.yaml"
+  evaluator_path: "evaluate_evidence.py"
+  
+  # Pre-audit hook: introspection runs before any L2+ action
+  pre_audit_hook:
+    enabled: true
+    applies_to_tiers: ["L2", "L3", "L4"]
+    action: "introspect"
+    on_fail: "block"
+    cache_ttl_seconds: 300  # Re-verify every 5 minutes
+  
+  # Evidence pack requirements by mode
+  mode_requirements:
+    security_audit:
+      min_rubric_score: 4.0
+      required_dimensions:
+        - evidence_completeness
+        - negative_proof_rigor
+        - chain_integrity
+      on_critical_finding: "escalate_to_l3"
+      
+    introspection:
+      min_rubric_score: 4.0
+      required_dimensions:
+        - chain_integrity
+        - evidence_completeness
+        - reasoning_validity
+      on_fail: "block_all_l2_plus"
+      
+    context_read:
+      min_rubric_score: 3.5
+      required_dimensions:
+        - evidence_precision
+        - chain_integrity
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TOOL DEFINITIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+tools:
+  # ─────────────────────────────────────────────────────────────────────────
+  # TOOL 1: Security Audit (Mode 1)
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: "rlm_security_audit"
+    description: |
+      Scan large codebases for security vulnerabilities using RLM navigation.
+      Produces hash-chained evidence pack proving presence/absence of issues.
+      
+      Use when:
+      - Reviewing external code for security issues
+      - Verifying compliance with security policies
+      - Auditing dependencies or third-party code
+      
+      Cannot be used for:
+      - Modifying code (read-only)
+      - Accessing private credentials
+    
+    governance:
+      tier: "L2"
+      escalate_to: "L3"
+      escalate_when:
+        - "evidence_pack.findings.critical_count > 0"
+        - "evidence_pack.findings.high_count >= 3"
+      evidence_required: true
+      evidence_mode: "security_audit"
+    
+    parameters:
+      - name: "target_path"
+        type: "string"
+        required: true
+        description: "Path to repository or directory to audit"
+        validation:
+          pattern: "^[a-zA-Z0-9_./-]+$"
+          max_length: 512
+          must_exist: true
+          must_be_directory: true
+      
+      - name: "claims_manifest"
+        type: "string"
+        required: false
+        description: "Path to claims manifest YAML (uses default if omitted)"
+        default: "security-claims-default.yaml"
+      
+      - name: "scope"
+        type: "array"
+        required: false
+        description: "File patterns to include"
+        default: ["**/*.py", "**/*.js", "**/*.ts", "**/*.go", "**/*.java"]
+      
+      - name: "exclude"
+        type: "array"
+        required: false
+        description: "File patterns to exclude"
+        default: ["**/node_modules/**", "**/.git/**", "**/venv/**", "**/test/**"]
+      
+      - name: "severity_threshold"
+        type: "string"
+        required: false
+        description: "Minimum severity to report"
+        enum: ["critical", "high", "medium", "low"]
+        default: "medium"
+    
+    outputs:
+      - name: "evidence_pack"
+        type: "object"
+        description: "Hash-chained evidence pack (JSON)"
+      - name: "verdict"
+        type: "string"
+        enum: ["PASS", "CONDITIONAL_PASS", "FAIL", "ESCALATE"]
+      - name: "findings_summary"
+        type: "object"
+        description: "Count of findings by severity"
+      - name: "verification_command"
+        type: "string"
+        description: "Command to verify evidence pack"
+    
+    execution:
+      handler: "rlm_docsync.security_audit"
+      timeout_seconds: 600
+      max_tokens_context: 10000000  # 10M tokens via RLM
+      sequential_council: true
+      vram_safe: true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # TOOL 2: Introspection (Mode 2)
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: "rlm_introspect"
+    description: |
+      Verify MoltBot/GuardSpine governance integrity against documented policies.
+      Produces cryptographic proof that implementation matches specification.
+      
+      This tool is AUTOMATICALLY invoked before any L2+ action.
+      Manual invocation is also available for explicit self-checks.
+      
+      CRITICAL: If introspection fails, ALL L2+ actions are BLOCKED.
+    
+    governance:
+      tier: "L1"  # Self-check is low-risk
+      evidence_required: true
+      evidence_mode: "introspection"
+      auto_invoke:
+        before_tiers: ["L2", "L3", "L4"]
+        cache_ttl_seconds: 300
+      on_fail:
+        action: "block_all_l2_plus"
+        notification: "CRITICAL: Governance integrity compromised"
+    
+    parameters:
+      - name: "moltbot_root"
+        type: "string"
+        required: false
+        description: "Path to MoltBot installation"
+        default: "${MOLTBOT_ROOT:-/home/david/moltbot}"
+      
+      - name: "claims_manifest"
+        type: "string"
+        required: false
+        description: "Path to self-audit claims manifest"
+        default: "guardspine-self-audit.claims.yaml"
+      
+      - name: "force_refresh"
+        type: "boolean"
+        required: false
+        description: "Bypass cache and force fresh audit"
+        default: false
+    
+    outputs:
+      - name: "evidence_pack"
+        type: "object"
+        description: "Hash-chained self-audit evidence"
+      - name: "integrity_verified"
+        type: "boolean"
+        description: "True if governance is intact"
+      - name: "drift_detected"
+        type: "array"
+        description: "List of spec-vs-reality mismatches"
+      - name: "blocking_issues"
+        type: "array"
+        description: "Critical issues that block L2+ actions"
+    
+    execution:
+      handler: "rlm_docsync.introspect"
+      timeout_seconds: 120
+      sequential_council: true
+      vram_safe: true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # TOOL 3: Context Reader (Mode 3)
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: "rlm_read"
+    description: |
+      Read and analyze large documents or repositories beyond context window limits.
+      Uses RLM strategies (needle, global, trace) to navigate 10M+ token contexts.
+      Produces evidence pack showing which content was consulted.
+      
+      Use when:
+      - Analyzing large codebases
+      - Summarizing extensive documentation
+      - Tracing execution flow across many files
+      - Answering questions about massive datasets
+    
+    governance:
+      tier: "L1"  # Reading is low-risk
+      evidence_required: true
+      evidence_mode: "context_read"
+      escalate_when:
+        - "output_used_for_execution"  # If findings trigger actions
+    
+    parameters:
+      - name: "path"
+        type: "string"
+        required: true
+        description: "Path to file or directory to read"
+        validation:
+          pattern: "^[a-zA-Z0-9_./-]+$"
+          max_length: 512
+          must_exist: true
+      
+      - name: "query"
+        type: "string"
+        required: true
+        description: "Question or task to perform on the content"
+        validation:
+          min_length: 3
+          max_length: 2000
+      
+      - name: "strategy"
+        type: "string"
+        required: false
+        description: "RLM navigation strategy"
+        enum: ["auto", "needle", "global", "trace"]
+        default: "auto"
+      
+      - name: "max_sub_calls"
+        type: "integer"
+        required: false
+        description: "Maximum recursive sub-LLM calls"
+        default: 50
+        validation:
+          min: 1
+          max: 200
+    
+    outputs:
+      - name: "answer"
+        type: "string"
+        description: "Response to the query"
+      - name: "evidence_pack"
+        type: "object"
+        description: "Hash-chained evidence of content consulted"
+      - name: "tokens_processed"
+        type: "integer"
+        description: "Total tokens navigated"
+      - name: "sub_calls_made"
+        type: "integer"
+        description: "Number of recursive LLM calls"
+      - name: "strategy_used"
+        type: "string"
+        description: "Actual strategy employed"
+    
+    execution:
+      handler: "rlm_docsync.read"
+      timeout_seconds: 300
+      max_tokens_context: 10000000
+      sequential_council: false  # Only council if escalating
+      vram_safe: true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RLM CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+rlm:
+  # How context is virtualized
+  context_virtualization:
+    storage: "variable"  # Context stored as Python variable, not in prompt
+    max_tokens: 10000000  # 10M token limit
+    chunk_size: 4096     # Tokens per chunk for map-reduce
+    
+  # REPL environment for code navigation
+  repl:
+    enabled: true
+    language: "python"
+    allowed_operations:
+      - "context.search(pattern)"
+      - "context.get_file(path)"
+      - "context.get_lines(file, start, end)"
+      - "context.partition(max_tokens)"
+      - "llm_query(prompt, chunk)"  # Sub-LLM call
+    forbidden_operations:
+      - "os.system"
+      - "subprocess"
+      - "eval"
+      - "exec"
+      - "__import__"
+  
+  # Sub-LLM configuration
+  sub_llm:
+    model: "qwen3:8b-q4_K_M"
+    max_tokens: 1000
+    temperature: 0.1
+    keep_alive: 0  # Unload after each call (VRAM safe)
+  
+  # Strategy configurations
+  strategies:
+    needle:
+      description: "Targeted search for specific information"
+      steps:
+        - "expand_query"
+        - "regex_filter"
+        - "rank_candidates"
+        - "generate_answer"
+      max_candidates: 50
+      
+    global:
+      description: "Map-reduce for overall understanding"
+      steps:
+        - "partition_context"
+        - "map_extract"
+        - "reduce_synthesize"
+      parallel_map: false  # Sequential for VRAM safety
+      
+    trace:
+      description: "Follow execution/data flow"
+      steps:
+        - "identify_entry"
+        - "follow_references"
+        - "build_graph"
+        - "synthesize"
+      max_depth: 10
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COUNCIL CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+council:
+  # Your installed 3-model council
+  models:
+    A:
+      name: "qwen3:8b-q4_K_M"
+      role: "lead"
+      weight: 0.40
+      focus: "completeness, logical validity, overall synthesis"
+      
+    B:
+      name: "falcon3:7b"
+      role: "adversarial"
+      weight: 0.35
+      focus: "find flaws, check precision, verify negative proofs"
+      
+    C:
+      name: "mistral:7b-instruct-q4_K_M"
+      role: "compliance"
+      weight: 0.25
+      focus: "schema validation, chain integrity, format compliance"
+  
+  # Execution order (VRAM-safe sequential)
+  execution_order: ["C", "A", "B"]  # Fast fail first
+  
+  # Early exit optimization
+  early_exit:
+    enabled: true
+    on_hard_fail: true
+    after_auditor: "C"  # If C finds hard fail, skip A and B
+  
+  # VRAM management
+  vram:
+    sequential: true
+    keep_alive: 0
+    unload_between_auditors: true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EVIDENCE PACK SCHEMA
+# ═══════════════════════════════════════════════════════════════════════════
+
+evidence_schema:
+  version: "1.0"
+  
+  required_fields:
+    - "schema_version"
+    - "pack_id"
+    - "created_at"
+    - "mode"
+    - "claims"
+    - "hash_chain"
+  
+  claim_fields:
+    required:
+      - "claim_id"
+      - "claim_text"
+      - "status"      # pass | fail | skip
+      - "evidence"    # array of evidence entries
+    optional:
+      - "severity"
+      - "rationale"
+      - "expect"      # matches_present | zero_matches
+  
+  evidence_entry_fields:
+    required:
+      - "type"        # code | search | file | trace
+      - "ref"         # pointer (file:line or search query)
+    optional:
+      - "snippet"
+      - "content_hash"
+      - "scope"
+      - "query"
+      - "result"
+  
+  hash_chain_fields:
+    required:
+      - "algorithm"   # sha256
+      - "entries"     # array of {index, previous, payload, hash}
+      - "root"        # final hash
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DEFAULT CLAIMS MANIFESTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+default_manifests:
+  # Security audit default claims (OWASP-inspired)
+  security_audit:
+    path: "security-claims-default.yaml"
+    claims:
+      - id: "SEC-SQLI-001"
+        text: "No raw SQL string concatenation"
+        severity: "critical"
+        expect: "zero_matches"
+        patterns:
+          - 'execute\([^)]*\+|execute\([^)]*%|execute\([^)]*\.format'
+          - 'cursor\.execute\(f["\']'
+        
+      - id: "SEC-SECRETS-001"
+        text: "No hardcoded credentials"
+        severity: "critical"
+        expect: "zero_matches"
+        patterns:
+          - '(password|api_key|secret|token)\s*=\s*["\'][^"\']{8,}'
+        exclude: ["**/test/**", "**/mock/**"]
+        
+      - id: "SEC-EVAL-001"
+        text: "No dangerous eval/exec usage"
+        severity: "high"
+        expect: "zero_matches"
+        patterns:
+          - '\beval\s*\(|\bexec\s*\('
+        exclude: ["**/test/**"]
+        
+      - id: "SEC-SHELL-001"
+        text: "No shell injection vulnerabilities"
+        severity: "critical"
+        expect: "zero_matches"
+        patterns:
+          - 'os\.system\s*\([^)]*\+|subprocess\..*shell\s*=\s*True'
+  
+  # Introspection default claims
+  introspection:
+    path: "guardspine-self-audit.claims.yaml"
+    claims:
+      - id: "GOV-TIER-001"
+        text: "L3 actions require 3-model council review"
+        severity: "critical"
+        expect: "matches_present"
+        patterns:
+          - 'AUDITOR_MODELS.*=.*\[.*,.*,.*\]'
+          - 'if.*tier.*>=.*3.*council'
+        
+      - id: "GOV-HASH-001"
+        text: "All audit decisions are hash-chained"
+        severity: "critical"
+        expect: "matches_present"
+        patterns:
+          - 'sha256|hash_chain|previous_hash'
+          - 'evidence.*hash|chain.*link'
+        
+      - id: "GOV-BYPASS-001"
+        text: "No code paths bypass governance"
+        severity: "critical"
+        expect: "zero_matches"
+        patterns:
+          - 'skip.*audit|bypass.*governance|disable.*check'
+        exclude: ["**/test/**"]
+        
+      - id: "GOV-INJECT-001"
+        text: "System prompts contain injection resistance"
+        severity: "high"
+        expect: "matches_present"
+        patterns:
+          - 'IMMUTABLE|UNTRUSTED|NEVER.*override'
+        scope: "**/prompts/**"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HOOKS AND CALLBACKS
+# ═══════════════════════════════════════════════════════════════════════════
+
+hooks:
+  # Before any tool execution
+  before_execute:
+    - name: "validate_parameters"
+      handler: "rlm_docsync.hooks.validate_params"
+      
+    - name: "check_introspection_cache"
+      handler: "rlm_docsync.hooks.check_introspection"
+      applies_to: ["rlm_security_audit", "rlm_read"]
+  
+  # After evidence pack generation, before council evaluation
+  before_council:
+    - name: "schema_validation"
+      handler: "rlm_docsync.hooks.validate_schema"
+      
+    - name: "hash_chain_verification"
+      handler: "rlm_docsync.hooks.verify_chain"
+  
+  # After council evaluation
+  after_council:
+    - name: "log_verdict"
+      handler: "rlm_docsync.hooks.log_verdict"
+      
+    - name: "escalation_check"
+      handler: "rlm_docsync.hooks.check_escalation"
+      
+    - name: "introspection_block_check"
+      handler: "rlm_docsync.hooks.check_introspection_block"
+      applies_to: ["rlm_introspect"]
+  
+  # After execution complete
+  after_execute:
+    - name: "persist_evidence"
+      handler: "rlm_docsync.hooks.persist_pack"
+      
+    - name: "update_regression_db"
+      handler: "rlm_docsync.hooks.update_regression"
+      applies_to: ["rlm_security_audit"]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LOGGING AND PERSISTENCE
+# ═══════════════════════════════════════════════════════════════════════════
+
+logging:
+  level: "INFO"
+  format: "[{timestamp}] [{level}] [{tool}] {message}"
+  
+  # Evidence pack storage
+  evidence_storage:
+    path: "${MOLTBOT_DATA:-/home/david/moltbot/data}/evidence_packs"
+    retention_days: 90
+    compress: true
+    index: true
+  
+  # Audit log (immutable)
+  audit_log:
+    path: "${MOLTBOT_DATA:-/home/david/moltbot/data}/audit.log"
+    append_only: true
+    include:
+      - "tool_invocation"
+      - "evidence_pack_created"
+      - "council_verdict"
+      - "escalation"
+      - "introspection_result"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REGISTRATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+registration:
+  # How to register this plugin with OpenClaw/MoltBot
+  entry_point: "rlm_docsync:register"
+  
+  # Auto-registration on MoltBot startup
+  auto_register: true
+  
+  # Required GuardSpine version
+  guardspine_version: ">=1.0.0"
+  
+  # Health check endpoint
+  health_check:
+    enabled: true
+    endpoint: "/health/rlm-docsync"
+    checks:
+      - "ollama_available"
+      - "models_loaded"
+      - "rubric_valid"
+      - "introspection_passing"
