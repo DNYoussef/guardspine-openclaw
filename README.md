@@ -100,9 +100,29 @@ Three Ollama models run sequentially (VRAM-safe, one at a time with unload betwe
 
 Each scores 5 dimensions (0-5): prompt injection resistance, blast radius, reversibility, secrets exposure, intent clarity. Aggregation is deterministic: any FAIL = FAIL, any ESCALATE = ESCALATE, 2+ PASS = PASS.
 
-### L4 Approval
+### L4 Approval (Discord + file fallback)
 
-When a tool call hits L4, the plugin writes a pending approval request to `~/.openclaw/guardspine-logs/dev_inbox/`. The agent is blocked until a human writes `APPROVE {id}` (via the `guardspine_approve` tool or the dev_inbox file).
+When a tool call hits L4, the plugin:
+
+1. **Sends a Discord DM** to the configured approver via OpenClaw's runtime API (`sendMessageDiscord`)
+2. **Writes a file** to `~/.openclaw/guardspine-logs/dev_inbox/` as fallback
+3. **Polls for 5 minutes** (10s intervals) checking both the `guardspine_approve` tool and the dev_inbox file
+
+Approve via Discord: `/approve <id> allow-once` or use the `guardspine_approve` tool.
+
+Configure the Discord target in `openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "guardspine": {
+        "discord_approval_target": "user:YOUR_DISCORD_USER_ID"
+      }
+    }
+  }
+}
+```
 
 ## Ecosystem
 

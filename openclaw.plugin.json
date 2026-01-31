@@ -22,6 +22,10 @@
         "type": "string",
         "default": "D:\\Projects\\GuardSpine",
         "description": "Path to GuardSpine monorepo"
+      },
+      "discord_approval_target": {
+        "type": "string",
+        "description": "Discord target for L4 approvals (e.g. user:123456789 or channel:123456789). If unset, file-only fallback."
       }
     }
   }

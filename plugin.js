@@ -236,7 +236,7 @@ async function runCouncilReview(endpoint, toolName, params, reason) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// L4: DISCORD REMOTE APPROVAL
+// L4: DISCORD REMOTE APPROVAL (dual-path: Discord API + file fallback)
 // ═══════════════════════════════════════════════════════════════
 
 // Approval state: pending approvals stored in memory (session-scoped)
@@ -260,13 +260,37 @@ function generateApprovalRequest(toolName, params, reason, councilResult) {
 
   pendingApprovals.set(approvalId, { ...request, nonce });
 
-  return {
-    approval_id: approvalId,
-    message: `[GuardSpine L4 Approval Required]\nTool: ${toolName}\nReason: ${reason}\nCouncil: ${councilResult ? councilResult.verdict : "N/A"}\nApproval ID: ${approvalId}\nExpires: ${expiresAt}\n\nReply: APPROVE ${approvalId} or DENY ${approvalId}`,
-  };
+  const discordMessage =
+    "**[GuardSpine L4 Approval Required]**\n" +
+    "```\n" +
+    "Tool:    " + toolName + "\n" +
+    "Reason:  " + reason + "\n" +
+    "Council: " + (councilResult ? councilResult.verdict : "N/A") + "\n" +
+    "Params:  " + JSON.stringify(params).substring(0, 200) + "\n" +
+    "ID:      " + approvalId + "\n" +
+    "Expires: " + expiresAt + "\n" +
+    "```\n" +
+    "Reply with:\n" +
+    "`/approve " + approvalId + " allow-once` or `/approve " + approvalId + " deny`\n" +
+    "Or use the guardspine_approve tool: `APPROVE " + approvalId + "` / `DENY " + approvalId + "`";
+
+  return { approval_id: approvalId, message: discordMessage };
 }
 
-// Check dev_inbox for approval (stub for file-based testing)
+// Send L4 approval request to Discord via OpenClaw runtime API (injected at register time)
+let _sendDiscord = null; // set during register()
+
+async function sendDiscordApproval(message, discordTarget) {
+  if (!_sendDiscord) return { ok: false, error: "sendMessageDiscord not available" };
+  try {
+    const result = await _sendDiscord(discordTarget, message, { verbose: false });
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Check dev_inbox for approval (file-based fallback)
 function checkDevInboxApproval(approvalId) {
   const inboxDir = path.join(LOG_DIR, "dev_inbox");
   try { fs.mkdirSync(inboxDir, { recursive: true }); } catch (e) {}
@@ -309,6 +333,12 @@ function register(api) {
   const ollamaEndpoint = config.council_endpoint || "http://localhost:11434";
   const sessionId = crypto.randomUUID();
   const evidence = new EvidencePack(sessionId);
+
+  // Bind Discord send from OpenClaw runtime (if available)
+  if (api.runtime && api.runtime.discord && api.runtime.discord.sendMessageDiscord) {
+    _sendDiscord = api.runtime.discord.sendMessageDiscord;
+    console.log("[guardspine] Discord send bound from OpenClaw runtime");
+  }
 
   // =============================================
   // HOOK 1: before_tool_call - MAIN GATING LOGIC
@@ -401,9 +431,8 @@ function register(api) {
         }
       }
 
-      // L4: remote approval required
+      // L4: remote approval required (Discord + file fallback)
       if (risk.tier === "L4") {
-        // Generate approval request
         const councilResult = decision.council || null;
         const approval = generateApprovalRequest(toolName, params, risk.reason, councilResult);
         decision.action = "PENDING_APPROVAL";
@@ -411,28 +440,67 @@ function register(api) {
         logDecision(decision);
         evidence.add({ type: "approval_request", tool: toolName, tier: "L4", approval_id: approval.approval_id });
 
-        // Write approval request to dev_inbox for Discord bot to pick up
+        // Write approval request to dev_inbox (file fallback)
         ensureLogDir();
         const requestFile = path.join(LOG_DIR, "dev_inbox", `pending-${approval.approval_id}.txt`);
         try { fs.mkdirSync(path.dirname(requestFile), { recursive: true }); } catch (e) {}
         try { fs.writeFileSync(requestFile, approval.message, "utf-8"); } catch (e) {}
 
-        console.log(`[guardspine] L4 approval required for ${toolName}. ID: ${approval.approval_id}`);
+        // Send to Discord via OpenClaw runtime (non-blocking, best-effort)
+        const discordTarget = config.discord_approval_target || null;
 
-        // Check for immediate approval (dev_inbox file)
-        const immediateCheck = checkDevInboxApproval(approval.approval_id);
-        if (immediateCheck && immediateCheck.approved) {
-          decision.action = "APPROVED";
-          logDecision(decision);
-          evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id });
-          return {};
+        if (discordTarget) {
+          sendDiscordApproval(approval.message, discordTarget)
+            .then((r) => {
+              if (r.ok) console.log(`[guardspine] L4 approval sent to Discord: ${discordTarget}`);
+              else console.log(`[guardspine] L4 Discord send failed: ${r.error || r.status}`);
+            })
+            .catch((e) => console.log(`[guardspine] L4 Discord send error: ${e.message}`));
         }
 
-        return {
-          abort: true,
-          reason: `[GuardSpine] L4 approval required for ${toolName}. Approval ID: ${approval.approval_id}. ` +
-            `Write "APPROVE ${approval.approval_id}" to ${path.join(LOG_DIR, "dev_inbox", "discord_inbox.txt")} to approve.`,
-        };
+        console.log(`[guardspine] L4 approval required for ${toolName}. ID: ${approval.approval_id}`);
+
+        // Poll for approval: check dev_inbox and in-memory approvals (up to 5 min, 10s interval)
+        const POLL_INTERVAL = 10000;
+        const MAX_POLLS = 30; // 5 min total
+        for (let i = 0; i < MAX_POLLS; i++) {
+          // Check in-memory (set by guardspine_approve tool from Discord /approve command)
+          if (!pendingApprovals.has(approval.approval_id)) {
+            // Was resolved by guardspine_approve tool
+            decision.action = "APPROVED_VIA_TOOL";
+            logDecision(decision);
+            evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "tool" });
+            console.log(`[guardspine] L4 APPROVED via tool: ${approval.approval_id}`);
+            return {};
+          }
+
+          // Check file-based inbox
+          const fileCheck = checkDevInboxApproval(approval.approval_id);
+          if (fileCheck) {
+            if (fileCheck.approved) {
+              decision.action = "APPROVED_VIA_FILE";
+              logDecision(decision);
+              evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "file" });
+              console.log(`[guardspine] L4 APPROVED via file: ${approval.approval_id}`);
+              return {};
+            } else {
+              decision.action = "DENIED";
+              decision.deny_reason = fileCheck.reason;
+              logDecision(decision);
+              evidence.add({ type: "approval_denied", tool: toolName, tier: "L4", approval_id: approval.approval_id, reason: fileCheck.reason });
+              return { abort: true, reason: `[GuardSpine] L4 DENIED: ${toolName} (${fileCheck.reason})` };
+            }
+          }
+
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        }
+
+        // Timeout
+        pendingApprovals.delete(approval.approval_id);
+        decision.action = "APPROVAL_TIMEOUT";
+        logDecision(decision);
+        evidence.add({ type: "approval_timeout", tool: toolName, tier: "L4", approval_id: approval.approval_id });
+        return { abort: true, reason: `[GuardSpine] L4 approval TIMED OUT for ${toolName}. ID: ${approval.approval_id}` };
       }
     }
 
