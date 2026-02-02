@@ -35,13 +35,52 @@ const RISK_RULES = {
 };
 
 const BASH_ESCALATION = [
-  { pattern: /\b(rm\s+-rf|rmdir|del\s+\/[sfq])/i, tier: "L3", reason: "destructive delete" },
-  { pattern: /\b(sudo|runas|gsudo)\b/i, tier: "L3", reason: "privilege escalation" },
+  // Destructive delete - handles whitespace/escape variations (r\m, rm  -rf, etc.)
+  { pattern: /\br\s*m\s+-\s*r\s*f\b/i, tier: "L3", reason: "destructive delete (rm -rf)" },
+  { pattern: /\b(rmdir|del\s+\/[sfq])/i, tier: "L3", reason: "destructive delete" },
+  { pattern: /\b(mkfs|dd\s+if=|shred|wipefs)\b/i, tier: "L3", reason: "destructive disk operation" },
+
+  // Privilege escalation
+  { pattern: /\b(sudo|runas|gsudo|doas|pkexec)\b/i, tier: "L3", reason: "privilege escalation" },
+
+  // Network download - includes pipe-to-shell detection
   { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b/i, tier: "L3", reason: "network download" },
-  { pattern: /\b(npm\s+install|pip\s+install|gem\s+install)\b/i, tier: "L3", reason: "package install" },
-  { pattern: /\b(ssh|scp|rsync)\b/i, tier: "L3", reason: "remote access" },
-  { pattern: /\b(passwd|useradd|usermod|chmod\s+777)\b/i, tier: "L4", reason: "system security modification" },
-  { pattern: /\b(api[_-]?key|secret|token|password)\s*=/i, tier: "L4", reason: "credential in command" },
+  { pattern: /\b(curl|wget)\b.*\|\s*(ba)?sh\b/i, tier: "L4", reason: "remote code execution (download piped to shell)" },
+  { pattern: /\b(curl|wget)\b.*\|\s*(python|perl|ruby|node)\b/i, tier: "L4", reason: "remote code execution (download piped to interpreter)" },
+
+  // Package install
+  { pattern: /\b(npm\s+install|pip\s+install|gem\s+install|cargo\s+install)\b/i, tier: "L3", reason: "package install" },
+
+  // Remote access
+  { pattern: /\b(ssh|scp|rsync|nc|ncat|netcat|socat)\b/i, tier: "L3", reason: "remote access" },
+
+  // Subshell / backtick execution used to obfuscate commands
+  { pattern: /`[^`]{4,}`/, tier: "L3", reason: "backtick command substitution" },
+  { pattern: /\$\([^)]{4,}\)/, tier: "L3", reason: "$() subshell execution" },
+
+  // Base64 encoded command execution
+  { pattern: /\b(base64\s+-d|base64\s+--decode)\s*\|/i, tier: "L4", reason: "base64-decoded command execution" },
+  { pattern: /\becho\s+[A-Za-z0-9+/=]{20,}\s*\|\s*(base64|bash|sh)/i, tier: "L4", reason: "encoded payload execution" },
+  { pattern: /\bpython[23]?\s+-c\s+.*(__import__|exec|eval)\b/i, tier: "L4", reason: "python inline code execution" },
+
+  // Permissions and system security
+  { pattern: /\bchmod\s+[0-7]*7[0-7]{0,2}\b/i, tier: "L4", reason: "world-writable permission (chmod)" },
+  { pattern: /\bchmod\s+(a\+[rwx]|o\+w|\+s|u\+s|g\+s)\b/i, tier: "L4", reason: "dangerous permission change" },
+  { pattern: /\b(passwd|useradd|usermod|groupadd|visudo)\b/i, tier: "L4", reason: "system security modification" },
+  { pattern: /\b(chown\s+root|chgrp\s+root)\b/i, tier: "L3", reason: "ownership change to root" },
+
+  // Credential exposure
+  { pattern: /\b(api[_-]?key|secret|token|password|private[_-]?key)\s*=/i, tier: "L4", reason: "credential in command" },
+
+  // Environment / startup persistence
+  { pattern: /\b(crontab|at\s+-f|systemctl\s+(enable|start))\b/i, tier: "L3", reason: "scheduled/persistent execution" },
+  { pattern: />>?\s*[~.]?\/?\.?(bash_profile|bashrc|zshrc|profile|crontab)/i, tier: "L4", reason: "shell startup file modification" },
+
+  // Firewall / network config
+  { pattern: /\b(iptables|ufw|firewall-cmd|netsh\s+advfirewall)\b/i, tier: "L4", reason: "firewall modification" },
+
+  // Eval / exec in shells
+  { pattern: /\beval\s+["'$]/i, tier: "L3", reason: "shell eval execution" },
 ];
 
 function classifyRisk(toolName, params) {
@@ -64,25 +103,54 @@ function classifyRisk(toolName, params) {
 // EVIDENCE PACK (hash-chained)
 // ═══════════════════════════════════════════════════════════════
 
+function canonicalJSON(obj) {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return "[" + obj.map(canonicalJSON).join(",") + "]";
+  const sorted = Object.keys(obj).sort();
+  return "{" + sorted.map((k) => JSON.stringify(k) + ":" + canonicalJSON(obj[k])).join(",") + "}";
+}
+
 class EvidencePack {
   constructor(sessionId) {
+    this.bundleId = crypto.randomUUID();
     this.sessionId = sessionId;
-    this.entries = [];
-    this.prevHash = "0".repeat(64);
+    this.items = [];
+    this.hashChain = [];
+    this.prevHash = "genesis";
+    this.createdAt = new Date().toISOString();
+    this._sequence = 0;
   }
   add(entry) {
-    const contentHash = crypto.createHash("sha256").update(JSON.stringify(entry)).digest("hex");
-    const chainHash = crypto.createHash("sha256").update(this.prevHash + contentHash).digest("hex");
-    this.entries.push({ ...entry, timestamp: new Date().toISOString(), content_hash: contentHash, chain_hash: chainHash });
+    const itemId = crypto.randomUUID();
+    const contentType = entry.type || "unknown";
+    const contentHash = "sha256:" + crypto.createHash("sha256").update(canonicalJSON(entry)).digest("hex");
+    const seq = this._sequence;
+    this._sequence++;
+    const chainInput = seq + "|" + itemId + "|" + contentType + "|" + contentHash + "|" + this.prevHash;
+    const chainHash = "sha256:" + crypto.createHash("sha256").update(chainInput).digest("hex");
+    this.items.push({ item_id: itemId, content_type: contentType, ...entry, timestamp: new Date().toISOString(), content_hash: contentHash, sequence: seq, chain_hash: chainHash });
+    this.hashChain.push(chainHash);
     this.prevHash = chainHash;
     return chainHash;
   }
   summary() {
     const byTier = {};
-    for (const e of this.entries) { const t = e.tier || "unknown"; byTier[t] = (byTier[t] || 0) + 1; }
-    return { session_id: this.sessionId, total_entries: this.entries.length, by_tier: byTier, chain_root: this.prevHash };
+    for (const e of this.items) { const t = e.tier || "unknown"; byTier[t] = (byTier[t] || 0) + 1; }
+    return { session_id: this.sessionId, total_entries: this.items.length, by_tier: byTier, chain_root: this.prevHash };
   }
-  toJSON() { return { session_id: this.sessionId, entries: this.entries, chain_root: this.prevHash }; }
+  toJSON() {
+    const rootHash = "sha256:" + crypto.createHash("sha256").update(this.hashChain.join("")).digest("hex");
+    return {
+      bundle_id: this.bundleId,
+      version: "0.2.0",
+      created_at: this.createdAt,
+      items: this.items,
+      immutability_proof: {
+        hash_chain: this.hashChain,
+        root_hash: rootHash,
+      },
+    };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -112,7 +180,15 @@ const FROZEN_PATHS = [
 
 function isFrozenPath(filePath) {
   if (!filePath) return false;
-  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  // Resolve symlinks and normalize to prevent symlink bypass attacks
+  let resolved;
+  try {
+    resolved = fs.realpathSync(filePath);
+  } catch (e) {
+    // File may not exist yet (e.g., about to be created); fall back to path.resolve
+    resolved = path.resolve(filePath);
+  }
+  const normalized = resolved.replace(/\\/g, "/").toLowerCase();
   return FROZEN_PATHS.some((f) => normalized.includes(f.toLowerCase()));
 }
 
