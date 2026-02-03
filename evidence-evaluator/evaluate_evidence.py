@@ -20,6 +20,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime
 
+# Import canonical hash functions from guardspine-kernel-py
+try:
+    from guardspine_kernel import (
+        canonical_json as _kernel_canonical_json,
+    )
+    _HAS_KERNEL = True
+except ImportError:
+    _HAS_KERNEL = False
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -554,8 +563,13 @@ def evaluate_evidence_pack(
     # Load evidence pack
     with open(pack_path, "r") as f:
         pack = json.load(f)
-    
-    pack_hash = hashlib.sha256(json.dumps(pack, sort_keys=True).encode()).hexdigest()[:16]
+
+    # Compute pack hash using canonical JSON for cross-language parity
+    if _HAS_KERNEL:
+        canonical = _kernel_canonical_json(pack)
+    else:
+        canonical = json.dumps(pack, sort_keys=True, separators=(",", ":"))
+    pack_hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
     
     if verbose:
         print(f"[EVAL] Loading evidence pack: {pack.get('id', 'unknown')}")

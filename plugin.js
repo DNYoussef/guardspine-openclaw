@@ -96,7 +96,9 @@ function classifyRisk(toolName, params) {
       return { tier, reason: "explicit classification" };
     }
   }
-  return { tier: "L2", reason: "unclassified tool (default)" };
+  // SECURITY: Unknown tools default to L3 (requires council review) not L2
+  // This prevents new/unknown tools from bypassing governance
+  return { tier: "L3", reason: "unclassified tool - requires council review" };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -122,14 +124,30 @@ class EvidencePack {
   }
   add(entry) {
     const itemId = crypto.randomUUID();
-    const contentType = entry.type || "unknown";
-    const contentHash = "sha256:" + crypto.createHash("sha256").update(canonicalJSON(entry)).digest("hex");
+    const contentType = entry.type || "guardspine/tool-event";
+    const content = { ...entry };
+    delete content.type;
+    const contentHash = "sha256:" + crypto.createHash("sha256").update(canonicalJSON(content)).digest("hex");
     const seq = this._sequence;
     this._sequence++;
     const chainInput = seq + "|" + itemId + "|" + contentType + "|" + contentHash + "|" + this.prevHash;
     const chainHash = "sha256:" + crypto.createHash("sha256").update(chainInput).digest("hex");
-    this.items.push({ item_id: itemId, content_type: contentType, ...entry, timestamp: new Date().toISOString(), content_hash: contentHash, sequence: seq, chain_hash: chainHash });
-    this.hashChain.push(chainHash);
+    this.items.push({
+      item_id: itemId,
+      content_type: contentType,
+      content: content,
+      content_hash: contentHash,
+      sequence: seq,
+      created_at: new Date().toISOString(),
+    });
+    this.hashChain.push({
+      sequence: seq,
+      item_id: itemId,
+      content_type: contentType,
+      content_hash: contentHash,
+      previous_hash: this.prevHash,
+      chain_hash: chainHash,
+    });
     this.prevHash = chainHash;
     return chainHash;
   }
@@ -139,7 +157,7 @@ class EvidencePack {
     return { session_id: this.sessionId, total_entries: this.items.length, by_tier: byTier, chain_root: this.prevHash };
   }
   toJSON() {
-    const rootHash = "sha256:" + crypto.createHash("sha256").update(this.hashChain.join("")).digest("hex");
+    const rootHash = "sha256:" + crypto.createHash("sha256").update(this.hashChain.map((l) => l.chain_hash).join("")).digest("hex");
     return {
       bundle_id: this.bundleId,
       version: "0.2.0",
@@ -665,17 +683,28 @@ function register(api) {
 
   // =============================================
   // TOOL: guardspine_approve - manual approval for L4
+  // SECURITY: Requires valid auth token for L4 approvals
   // =============================================
   api.registerTool(() => ({
     name: "guardspine_approve",
-    description: "Approve or deny a pending L4 action by approval ID. Only the human operator should use this.",
+    description: "Approve or deny a pending L4 action by approval ID. Requires valid auth_token from out-of-band channel (Discord/SMS).",
     parameters: { type: "object", properties: {
       approval_id: { type: "string", description: "The approval ID to respond to" },
       action: { type: "string", enum: ["approve", "deny"], description: "approve or deny" },
-    }, required: ["approval_id", "action"] },
+      auth_token: { type: "string", description: "Authentication token from approval notification (required for L4)" },
+    }, required: ["approval_id", "action", "auth_token"] },
     execute: async (params) => {
+      // SECURITY: Validate auth token before processing L4 approval
       const pending = pendingApprovals.get(params.approval_id);
       if (!pending) return { error: "No pending approval with that ID" };
+
+      // Verify auth token matches the one sent via out-of-band channel
+      if (!pending.auth_token || params.auth_token !== pending.auth_token) {
+        evidence.add({ type: "approval_auth_failed", approval_id: params.approval_id, tier: "L4", reason: "invalid_token" });
+        logDecision({ type: "approval_auth_failed", approval_id: params.approval_id, timestamp: new Date().toISOString() });
+        return { error: "Invalid or missing auth token. L4 approvals require token from notification channel." };
+      }
+
       if (new Date() > new Date(pending.expires_at)) {
         pendingApprovals.delete(params.approval_id);
         return { error: "Approval expired" };
@@ -686,12 +715,12 @@ function register(api) {
         try { fs.mkdirSync(inboxDir, { recursive: true }); } catch (e) {}
         fs.appendFileSync(path.join(inboxDir, "discord_inbox.txt"), `APPROVE ${params.approval_id}\n`, "utf-8");
         pendingApprovals.delete(params.approval_id);
-        evidence.add({ type: "approval_granted", approval_id: params.approval_id, tier: "L4" });
+        evidence.add({ type: "approval_granted", approval_id: params.approval_id, tier: "L4", auth_verified: true });
         logDecision({ type: "approval_granted", approval_id: params.approval_id, timestamp: new Date().toISOString() });
         return { status: "approved", approval_id: params.approval_id };
       } else {
         pendingApprovals.delete(params.approval_id);
-        evidence.add({ type: "approval_denied", approval_id: params.approval_id, tier: "L4" });
+        evidence.add({ type: "approval_denied", approval_id: params.approval_id, tier: "L4", auth_verified: true });
         logDecision({ type: "approval_denied", approval_id: params.approval_id, timestamp: new Date().toISOString() });
         return { status: "denied", approval_id: params.approval_id };
       }

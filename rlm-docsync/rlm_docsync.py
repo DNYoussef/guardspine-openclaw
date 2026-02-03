@@ -25,6 +25,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 
+# Import canonical hash functions from guardspine-kernel-py
+try:
+    from guardspine_kernel import (
+        canonical_json as _kernel_canonical_json,
+        compute_content_hash as _kernel_content_hash,
+        build_hash_chain as _kernel_build_chain,
+        compute_root_hash as _kernel_root_hash,
+        GENESIS_HASH,
+    )
+    _HAS_KERNEL = True
+except ImportError:
+    _HAS_KERNEL = False
+    GENESIS_HASH = "genesis"
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -119,9 +133,17 @@ def sha256_hex(data: bytes) -> str:
     """Compute SHA-256 hash."""
     return hashlib.sha256(data).hexdigest()
 
+
 def stable_json(obj: Any) -> str:
-    """Deterministic JSON serialization."""
+    """Deterministic JSON serialization.
+
+    Uses guardspine-kernel-py when available for cross-language parity.
+    """
+    if _HAS_KERNEL:
+        return _kernel_canonical_json(obj)
+    # Fallback (DEPRECATED - install guardspine-kernel-py)
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
 
 def generate_pack_id(mode: str) -> str:
     """Generate unique evidence pack ID."""
@@ -129,26 +151,52 @@ def generate_pack_id(mode: str) -> str:
     rand = sha256_hex(os.urandom(8))[:8]
     return f"epk_{mode}_{ts}_{rand}"
 
+
 def build_hash_chain(payloads: List[Any]) -> Dict[str, Any]:
-    """Build SHA-256 hash chain from payloads."""
+    """Build SHA-256 hash chain from payloads.
+
+    Uses guardspine-kernel-py when available for cross-language parity.
+    Returns v0.2.0 format with flat hash_chain array.
+    """
+    if _HAS_KERNEL:
+        # Use kernel for v0.2.0 compliant chain
+        items = [
+            {"content_type": "payload", "content": p}
+            for p in payloads
+        ]
+        chain = _kernel_build_chain(items)
+        root = _kernel_root_hash(chain)
+        return {
+            "algorithm": "sha256",
+            "hash_chain": chain,
+            "root_hash": root,
+        }
+
+    # Fallback (DEPRECATED - install guardspine-kernel-py)
     entries = []
-    prev = "0" * 64
-    
+    prev = GENESIS_HASH
+
     for idx, payload in enumerate(payloads):
-        content = prev + stable_json(payload)
-        h = sha256_hex(content.encode("utf-8"))
+        content_hash = "sha256:" + sha256_hex(stable_json(payload).encode("utf-8"))
+        chain_input = f"{idx}|payload_{idx}|payload|{content_hash}|{prev}"
+        chain_hash = "sha256:" + sha256_hex(chain_input.encode("utf-8"))
         entries.append({
-            "index": idx,
-            "previous": prev,
-            "payload": payload,
-            "hash": h
+            "sequence": idx,
+            "item_id": f"payload_{idx}",
+            "content_type": "payload",
+            "content_hash": content_hash,
+            "previous_hash": prev,
+            "chain_hash": chain_hash,
         })
-        prev = h
-    
+        prev = chain_hash
+
+    # Compute root hash
+    root = "sha256:" + sha256_hex("".join(e["chain_hash"] for e in entries).encode("utf-8"))
+
     return {
         "algorithm": "sha256",
-        "entries": entries,
-        "root": prev
+        "hash_chain": entries,
+        "root_hash": root,
     }
 
 def unload_model(model: str) -> None:
