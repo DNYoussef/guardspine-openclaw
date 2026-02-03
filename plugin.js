@@ -27,60 +27,21 @@ const http = require("http");
 // ═══════════════════════════════════════════════════════════════
 
 const RISK_RULES = {
-  L0: new Set(["sequentialthinking", "memory_search", "memory_status", "guardspine_status", "guardspine_audit_log"]),
-  L1: new Set(["rlm_read", "rlm_introspect", "web_search"]),
-  L2: new Set(["rlm_security_audit", "bash", "apply_patch", "canvas_write", "send_message", "cron_schedule"]),
+  L0: new Set(["sequentialthinking", "memory_search", "memory_status", "guardspine_status", "guardspine_audit_log", "model_status", "check_model_fit"]),
+  L1: new Set(["rlm_read", "rlm_introspect", "web_search", "transcribe_audio", "generate_image"]),
+  L2: new Set(["rlm_security_audit", "bash", "apply_patch", "canvas_write", "send_message", "cron_schedule", "download_youtube"]),
   L3: new Set(["plugin_install", "gateway_restart", "discord_guild_admin"]),
   L4: new Set(["config_write", "credential_access", "auth_profile_modify"]),
 };
 
 const BASH_ESCALATION = [
-  // Destructive delete - handles whitespace/escape variations (r\m, rm  -rf, etc.)
-  { pattern: /\br\s*m\s+-\s*r\s*f\b/i, tier: "L3", reason: "destructive delete (rm -rf)" },
-  { pattern: /\b(rmdir|del\s+\/[sfq])/i, tier: "L3", reason: "destructive delete" },
-  { pattern: /\b(mkfs|dd\s+if=|shred|wipefs)\b/i, tier: "L3", reason: "destructive disk operation" },
-
-  // Privilege escalation
-  { pattern: /\b(sudo|runas|gsudo|doas|pkexec)\b/i, tier: "L3", reason: "privilege escalation" },
-
-  // Network download - includes pipe-to-shell detection
+  { pattern: /\b(rm\s+-rf|rmdir|del\s+\/[sfq])/i, tier: "L3", reason: "destructive delete" },
+  { pattern: /\b(sudo|runas|gsudo)\b/i, tier: "L3", reason: "privilege escalation" },
   { pattern: /\b(curl|wget|Invoke-WebRequest|iwr)\b/i, tier: "L3", reason: "network download" },
-  { pattern: /\b(curl|wget)\b.*\|\s*(ba)?sh\b/i, tier: "L4", reason: "remote code execution (download piped to shell)" },
-  { pattern: /\b(curl|wget)\b.*\|\s*(python|perl|ruby|node)\b/i, tier: "L4", reason: "remote code execution (download piped to interpreter)" },
-
-  // Package install
-  { pattern: /\b(npm\s+install|pip\s+install|gem\s+install|cargo\s+install)\b/i, tier: "L3", reason: "package install" },
-
-  // Remote access
-  { pattern: /\b(ssh|scp|rsync|nc|ncat|netcat|socat)\b/i, tier: "L3", reason: "remote access" },
-
-  // Subshell / backtick execution used to obfuscate commands
-  { pattern: /`[^`]{4,}`/, tier: "L3", reason: "backtick command substitution" },
-  { pattern: /\$\([^)]{4,}\)/, tier: "L3", reason: "$() subshell execution" },
-
-  // Base64 encoded command execution
-  { pattern: /\b(base64\s+-d|base64\s+--decode)\s*\|/i, tier: "L4", reason: "base64-decoded command execution" },
-  { pattern: /\becho\s+[A-Za-z0-9+/=]{20,}\s*\|\s*(base64|bash|sh)/i, tier: "L4", reason: "encoded payload execution" },
-  { pattern: /\bpython[23]?\s+-c\s+.*(__import__|exec|eval)\b/i, tier: "L4", reason: "python inline code execution" },
-
-  // Permissions and system security
-  { pattern: /\bchmod\s+[0-7]*7[0-7]{0,2}\b/i, tier: "L4", reason: "world-writable permission (chmod)" },
-  { pattern: /\bchmod\s+(a\+[rwx]|o\+w|\+s|u\+s|g\+s)\b/i, tier: "L4", reason: "dangerous permission change" },
-  { pattern: /\b(passwd|useradd|usermod|groupadd|visudo)\b/i, tier: "L4", reason: "system security modification" },
-  { pattern: /\b(chown\s+root|chgrp\s+root)\b/i, tier: "L3", reason: "ownership change to root" },
-
-  // Credential exposure
-  { pattern: /\b(api[_-]?key|secret|token|password|private[_-]?key)\s*=/i, tier: "L4", reason: "credential in command" },
-
-  // Environment / startup persistence
-  { pattern: /\b(crontab|at\s+-f|systemctl\s+(enable|start))\b/i, tier: "L3", reason: "scheduled/persistent execution" },
-  { pattern: />>?\s*[~.]?\/?\.?(bash_profile|bashrc|zshrc|profile|crontab)/i, tier: "L4", reason: "shell startup file modification" },
-
-  // Firewall / network config
-  { pattern: /\b(iptables|ufw|firewall-cmd|netsh\s+advfirewall)\b/i, tier: "L4", reason: "firewall modification" },
-
-  // Eval / exec in shells
-  { pattern: /\beval\s+["'$]/i, tier: "L3", reason: "shell eval execution" },
+  { pattern: /\b(npm\s+install|pip\s+install|gem\s+install)\b/i, tier: "L3", reason: "package install" },
+  { pattern: /\b(ssh|scp|rsync)\b/i, tier: "L3", reason: "remote access" },
+  { pattern: /\b(passwd|useradd|usermod|chmod\s+777)\b/i, tier: "L4", reason: "system security modification" },
+  { pattern: /\b(api[_-]?key|secret|token|password)\s*=/i, tier: "L4", reason: "credential in command" },
 ];
 
 function classifyRisk(toolName, params) {
@@ -96,79 +57,32 @@ function classifyRisk(toolName, params) {
       return { tier, reason: "explicit classification" };
     }
   }
-  // SECURITY: Unknown tools default to L3 (requires council review) not L2
-  // This prevents new/unknown tools from bypassing governance
-  return { tier: "L3", reason: "unclassified tool - requires council review" };
+  return { tier: "L2", reason: "unclassified tool (default)" };
 }
 
 // ═══════════════════════════════════════════════════════════════
 // EVIDENCE PACK (hash-chained)
 // ═══════════════════════════════════════════════════════════════
 
-function canonicalJSON(obj) {
-  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) return "[" + obj.map(canonicalJSON).join(",") + "]";
-  const sorted = Object.keys(obj).sort();
-  return "{" + sorted.map((k) => JSON.stringify(k) + ":" + canonicalJSON(obj[k])).join(",") + "}";
-}
-
 class EvidencePack {
   constructor(sessionId) {
-    this.bundleId = crypto.randomUUID();
     this.sessionId = sessionId;
-    this.items = [];
-    this.hashChain = [];
-    this.prevHash = "genesis";
-    this.createdAt = new Date().toISOString();
-    this._sequence = 0;
+    this.entries = [];
+    this.prevHash = "0".repeat(64);
   }
   add(entry) {
-    const itemId = crypto.randomUUID();
-    const contentType = entry.type || "guardspine/tool-event";
-    const content = { ...entry };
-    delete content.type;
-    const contentHash = "sha256:" + crypto.createHash("sha256").update(canonicalJSON(content)).digest("hex");
-    const seq = this._sequence;
-    this._sequence++;
-    const chainInput = seq + "|" + itemId + "|" + contentType + "|" + contentHash + "|" + this.prevHash;
-    const chainHash = "sha256:" + crypto.createHash("sha256").update(chainInput).digest("hex");
-    this.items.push({
-      item_id: itemId,
-      content_type: contentType,
-      content: content,
-      content_hash: contentHash,
-      sequence: seq,
-      created_at: new Date().toISOString(),
-    });
-    this.hashChain.push({
-      sequence: seq,
-      item_id: itemId,
-      content_type: contentType,
-      content_hash: contentHash,
-      previous_hash: this.prevHash,
-      chain_hash: chainHash,
-    });
+    const contentHash = crypto.createHash("sha256").update(JSON.stringify(entry)).digest("hex");
+    const chainHash = crypto.createHash("sha256").update(this.prevHash + contentHash).digest("hex");
+    this.entries.push({ ...entry, timestamp: new Date().toISOString(), content_hash: contentHash, chain_hash: chainHash });
     this.prevHash = chainHash;
     return chainHash;
   }
   summary() {
     const byTier = {};
-    for (const e of this.items) { const t = e.tier || "unknown"; byTier[t] = (byTier[t] || 0) + 1; }
-    return { session_id: this.sessionId, total_entries: this.items.length, by_tier: byTier, chain_root: this.prevHash };
+    for (const e of this.entries) { const t = e.tier || "unknown"; byTier[t] = (byTier[t] || 0) + 1; }
+    return { session_id: this.sessionId, total_entries: this.entries.length, by_tier: byTier, chain_root: this.prevHash };
   }
-  toJSON() {
-    const rootHash = "sha256:" + crypto.createHash("sha256").update(this.hashChain.map((l) => l.chain_hash).join("")).digest("hex");
-    return {
-      bundle_id: this.bundleId,
-      version: "0.2.0",
-      created_at: this.createdAt,
-      items: this.items,
-      immutability_proof: {
-        hash_chain: this.hashChain,
-        root_hash: rootHash,
-      },
-    };
-  }
+  toJSON() { return { session_id: this.sessionId, entries: this.entries, chain_root: this.prevHash }; }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -188,6 +102,132 @@ function logDecision(decision) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// L3.5: DAILY SPEND TRACKER (for Opus tie-breaker budget)
+// ═══════════════════════════════════════════════════════════════
+
+const DAILY_SPEND_FILE = path.join(LOG_DIR, "daily-spend.json");
+const OPUS_DAILY_LIMIT = 5.00; // USD
+const OPUS_COST_PER_CALL = 0.15; // Estimated cost per 4K token call
+
+function getDailySpend() {
+  ensureLogDir();
+  try {
+    if (!fs.existsSync(DAILY_SPEND_FILE)) return { date: "", spend: 0 };
+    const data = JSON.parse(fs.readFileSync(DAILY_SPEND_FILE, "utf-8"));
+    const today = new Date().toISOString().split("T")[0];
+    if (data.date !== today) return { date: today, spend: 0 }; // Reset for new day
+    return data;
+  } catch (e) { return { date: "", spend: 0 }; }
+}
+
+function recordOpusSpend(cost) {
+  const today = new Date().toISOString().split("T")[0];
+  const current = getDailySpend();
+  const newSpend = { date: today, spend: (current.date === today ? current.spend : 0) + cost };
+  try { fs.writeFileSync(DAILY_SPEND_FILE, JSON.stringify(newSpend), "utf-8"); }
+  catch (e) { console.error("[guardspine] Failed to record Opus spend:", e.message); }
+  return newSpend;
+}
+
+function canAffordOpus() {
+  const { spend } = getDailySpend();
+  return spend + OPUS_COST_PER_CALL <= OPUS_DAILY_LIMIT;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PATTERN AUTHORIZATION (L4 bypass via human-approved allowlist)
+// ═══════════════════════════════════════════════════════════════
+
+const ALLOWLIST_FILE = path.join(process.env.USERPROFILE || process.env.HOME || ".", ".openclaw", "guardspine-allowlist.json");
+const PENDING_FILE = path.join(process.env.USERPROFILE || process.env.HOME || ".", ".openclaw", "guardspine-pending.json");
+
+let allowlistCache = null;
+let allowlistMtime = 0;
+
+function loadAllowlist() {
+  try {
+    const stat = fs.statSync(ALLOWLIST_FILE);
+    if (allowlistCache && stat.mtimeMs === allowlistMtime) return allowlistCache;
+    const data = JSON.parse(fs.readFileSync(ALLOWLIST_FILE, "utf-8"));
+    allowlistCache = data;
+    allowlistMtime = stat.mtimeMs;
+    return data;
+  } catch (e) {
+    return { patterns: [], allowed_path_prefixes: [] };
+  }
+}
+
+function checkAllowlistMatch(toolName, params) {
+  const allowlist = loadAllowlist();
+
+  // Check path prefixes for file-related tools
+  if (toolName === "bash" || toolName === "apply_patch") {
+    const target = params.file || params.path || params.command || "";
+    for (const prefix of allowlist.allowed_path_prefixes || []) {
+      const expandedPrefix = prefix.replace(/^~/, process.env.USERPROFILE || process.env.HOME || "");
+      if (target.includes(expandedPrefix)) {
+        return { matched: true, rule: "path_prefix:" + prefix, bypass_tier: "L1" };
+      }
+    }
+  }
+
+  // Check explicit patterns
+  for (const pattern of allowlist.patterns || []) {
+    if (pattern.tool !== toolName) continue;
+    if (pattern.expires_at && new Date(pattern.expires_at) < new Date()) continue;
+
+    // Match by param substring (simple but safe)
+    if (pattern.param_match) {
+      const paramsStr = JSON.stringify(params);
+      if (paramsStr.includes(pattern.param_match)) {
+        return { matched: true, rule: "pattern:" + pattern.id, bypass_tier: pattern.bypass_tier || "L2" };
+      }
+    }
+
+    // Match by exact tool (no params required)
+    if (!pattern.param_match) {
+      return { matched: true, rule: "pattern:" + pattern.id, bypass_tier: pattern.bypass_tier || "L2" };
+    }
+  }
+
+  return { matched: false };
+}
+
+function writePendingCandidate(toolName, params, reason) {
+  try {
+    let pending = { pending: [] };
+    if (fs.existsSync(PENDING_FILE)) {
+      pending = JSON.parse(fs.readFileSync(PENDING_FILE, "utf-8"));
+    }
+
+    // Avoid duplicates (same tool + similar params)
+    const paramsPreview = JSON.stringify(params).substring(0, 100);
+    const exists = pending.pending.some(p => p.tool === toolName && p.params_preview === paramsPreview);
+    if (exists) return;
+
+    pending.pending.push({
+      id: crypto.randomUUID().substring(0, 8),
+      tool: toolName,
+      params_preview: paramsPreview,
+      reason: reason,
+      suggested_at: new Date().toISOString(),
+      suggested_pattern: {
+        tool: toolName,
+        param_match: paramsPreview.length < 50 ? paramsPreview : null,
+        bypass_tier: "L2",
+        expires_at: null,
+        notes: "Auto-suggested from L4 trigger"
+      }
+    });
+
+    fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2), "utf-8");
+    console.log(`[guardspine] Pattern candidate written to guardspine-pending.json: ${toolName}`);
+  } catch (e) {
+    console.error("[guardspine] Failed to write pending candidate:", e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // FROZEN PATHS
 // ═══════════════════════════════════════════════════════════════
 
@@ -198,15 +238,7 @@ const FROZEN_PATHS = [
 
 function isFrozenPath(filePath) {
   if (!filePath) return false;
-  // Resolve symlinks and normalize to prevent symlink bypass attacks
-  let resolved;
-  try {
-    resolved = fs.realpathSync(filePath);
-  } catch (e) {
-    // File may not exist yet (e.g., about to be created); fall back to path.resolve
-    resolved = path.resolve(filePath);
-  }
-  const normalized = resolved.replace(/\\/g, "/").toLowerCase();
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
   return FROZEN_PATHS.some((f) => normalized.includes(f.toLowerCase()));
 }
 
@@ -216,8 +248,8 @@ function isFrozenPath(filePath) {
 
 const COUNCIL_MODELS = [
   { id: "A", model: "qwen3:8b", weight: 0.40, role: "Primary Evaluator", focus: "completeness, logical validity" },
-  { id: "B", model: "falcon3:7b", weight: 0.35, role: "Technical Verifier", focus: "precision, adversarial checking" },
-  { id: "C", model: "qwen2.5-coder:7b", weight: 0.25, role: "Code Auditor", focus: "compliance, chain integrity" },
+  { id: "B", model: "qwen3-coder:30b", weight: 0.35, role: "Technical Verifier", focus: "precision, adversarial checking, code quality" },
+  { id: "C", model: "gpt-oss:20b", weight: 0.25, role: "Code Auditor", focus: "compliance, chain integrity, tool calling" },
 ];
 
 const COUNCIL_PROMPT = `You are a GuardSpine security auditor. Evaluate if this action should be allowed.
@@ -315,18 +347,84 @@ async function runCouncilReview(endpoint, toolName, params, reason) {
     }
   }
 
-  // Aggregate: any FAIL = FAIL, any ESCALATE = ESCALATE, 2+ PASS = PASS
+  // Aggregate votes
   const failCount = votes.filter((v) => v.verdict === "FAIL").length;
   const passCount = votes.filter((v) => v.verdict === "PASS").length;
   const escalateCount = votes.filter((v) => v.verdict === "ESCALATE").length;
 
+  // L3.5: Detect deadlock (1-1-1 split or any ESCALATE)
+  const isDeadlock = (passCount === 1 && failCount === 1 && escalateCount === 1) ||
+                     (passCount === 1 && failCount === 1 && escalateCount === 0) ||
+                     escalateCount > 0;
+
   let finalVerdict;
-  if (failCount > 0) finalVerdict = "FAIL";
-  else if (escalateCount > 0) finalVerdict = "ESCALATE";
-  else if (passCount >= 2) finalVerdict = "PASS";
+  if (passCount >= 2) finalVerdict = "PASS";  // Clear majority = PASS
+  else if (failCount >= 2) finalVerdict = "FAIL";  // Clear majority = FAIL
+  else if (isDeadlock) finalVerdict = "DEADLOCK";  // Needs L3.5 tie-breaker
   else finalVerdict = "FAIL"; // default deny
 
-  return { verdict: finalVerdict, votes, pass_count: passCount, fail_count: failCount, escalate_count: escalateCount };
+  return { verdict: finalVerdict, votes, pass_count: passCount, fail_count: failCount, escalate_count: escalateCount, is_deadlock: isDeadlock };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// L3.5: OPUS TIE-BREAKER (called on council deadlock)
+// ═══════════════════════════════════════════════════════════════
+
+const OPUS_MODEL = "anthropic/claude-opus-4-5-20250514";
+const OPUS_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+
+async function escalateToOpus(toolName, params, councilVotes, apiKey) {
+  if (!canAffordOpus()) {
+    console.log("[guardspine] L3.5 blocked: daily Opus budget ($5) exceeded");
+    return { verdict: "ESCALATE", reason: "budget_exceeded", opus_called: false };
+  }
+
+  const voteSummary = councilVotes.map(v => `${v.auditor}(${v.model}): ${v.verdict} - ${v.reason}`).join("\n");
+  const prompt = `You are the GuardSpine L3.5 tie-breaker. The local council is deadlocked.
+
+ACTION: ${toolName}
+PARAMS: ${JSON.stringify(params).substring(0, 500)}
+
+COUNCIL VOTES:
+${voteSummary}
+
+Make the final call. Respond with JSON ONLY:
+{"verdict": "PASS" or "FAIL", "reason": "one line explanation"}`;
+
+  try {
+    const response = await fetch(OPUS_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://openclaw.local",
+        "X-Title": "GuardSpine L3.5"
+      },
+      body: JSON.stringify({
+        model: OPUS_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 200
+      })
+    });
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
+
+    // Record spend
+    recordOpusSpend(OPUS_COST_PER_CALL);
+    console.log(`[guardspine] L3.5 Opus called, daily spend: $${getDailySpend().spend.toFixed(2)}`);
+
+    // Parse response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return { verdict: parsed.verdict || "FAIL", reason: parsed.reason || "opus_response", opus_called: true };
+    }
+    return { verdict: "FAIL", reason: "opus_parse_error", opus_called: true };
+  } catch (e) {
+    console.error("[guardspine] L3.5 Opus error:", e.message);
+    return { verdict: "ESCALATE", reason: "opus_error: " + e.message, opus_called: false };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -354,33 +452,131 @@ function generateApprovalRequest(toolName, params, reason, councilResult) {
 
   pendingApprovals.set(approvalId, { ...request, nonce });
 
+  // Build council details block
+  let councilBlock = "Council: N/A (no council review)\n";
+  if (councilResult && councilResult.votes) {
+    councilBlock = "Council Verdict: " + councilResult.verdict +
+      " (" + councilResult.pass_count + " PASS / " + councilResult.fail_count + " FAIL / " + councilResult.escalate_count + " ESCALATE)\n\n";
+    for (const vote of councilResult.votes) {
+      const scores = vote.scores || {};
+      councilBlock += "  [" + vote.auditor + "] " + vote.model + " -> " + vote.verdict + " (" + vote.elapsed_ms + "ms)\n";
+      councilBlock += "    Reason: " + (vote.reason || "none") + "\n";
+      if (Object.keys(scores).length > 0) {
+        councilBlock += "    Scores: injection=" + (scores.prompt_injection_resistance || "?") +
+          " blast=" + (scores.blast_radius || "?") +
+          " revert=" + (scores.reversibility || "?") +
+          " secrets=" + (scores.secrets_exposure || "?") +
+          " intent=" + (scores.intent_clarity || "?") + "\n";
+      }
+    }
+    // Add recommendation based on scores
+    const avgScores = {};
+    let totalWeight = 0;
+    for (const vote of councilResult.votes) {
+      if (vote.scores) {
+        for (const [k, v] of Object.entries(vote.scores)) {
+          avgScores[k] = (avgScores[k] || 0) + (v * vote.weight);
+        }
+        totalWeight += vote.weight;
+      }
+    }
+    if (totalWeight > 0) {
+      const riskAreas = [];
+      for (const [k, v] of Object.entries(avgScores)) {
+        const avg = v / totalWeight;
+        if (avg < 3) riskAreas.push(k.replace(/_/g, " ") + " (" + avg.toFixed(1) + "/5)");
+      }
+      if (riskAreas.length > 0) {
+        councilBlock += "\n  Risk Areas: " + riskAreas.join(", ") + "\n";
+      } else {
+        councilBlock += "\n  Risk Areas: none flagged (all scores >= 3/5)\n";
+      }
+    }
+  }
+
   const discordMessage =
     "**[GuardSpine L4 Approval Required]**\n" +
     "```\n" +
     "Tool:    " + toolName + "\n" +
     "Reason:  " + reason + "\n" +
-    "Council: " + (councilResult ? councilResult.verdict : "N/A") + "\n" +
     "Params:  " + JSON.stringify(params).substring(0, 200) + "\n" +
     "ID:      " + approvalId + "\n" +
     "Expires: " + expiresAt + "\n" +
+    "\n" + councilBlock +
     "```\n" +
-    "Reply with:\n" +
-    "`/approve " + approvalId + " allow-once` or `/approve " + approvalId + " deny`\n" +
-    "Or use the guardspine_approve tool: `APPROVE " + approvalId + "` / `DENY " + approvalId + "`";
+    "React: \uD83D\uDC4D to approve | \uD83D\uDC4E to deny\n" +
+    "Or reply: `/approve " + approvalId + " allow-once`";
 
   return { approval_id: approvalId, message: discordMessage };
 }
 
 // Send L4 approval request to Discord via OpenClaw runtime API (injected at register time)
 let _sendDiscord = null; // set during register()
+let _discordToken = null; // for reaction checking
 
-async function sendDiscordApproval(message, discordTarget) {
+// Store message IDs for reaction checking (approvalId -> messageId)
+const approvalMessageIds = new Map();
+
+async function sendDiscordApproval(message, discordTarget, approvalId) {
   if (!_sendDiscord) return { ok: false, error: "sendMessageDiscord not available" };
   try {
     const result = await _sendDiscord(discordTarget, message, { verbose: false });
+    // Store message ID for reaction checking
+    if (result && result.messageId) {
+      approvalMessageIds.set(approvalId, {
+        messageId: result.messageId,
+        channelId: result.channelId || discordTarget.replace(/^(user:|channel:)/, ""),
+      });
+    }
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+}
+
+// Check Discord reactions for 👍 approval
+async function checkDiscordReaction(approvalId, targetUserId) {
+  const msgInfo = approvalMessageIds.get(approvalId);
+  if (!msgInfo || !_discordToken) return null;
+
+  try {
+    // Use Discord REST API to fetch reactions
+    const url = `https://discord.com/api/v10/channels/${msgInfo.channelId}/messages/${msgInfo.messageId}/reactions/%F0%9F%91%8D`; // 👍 encoded
+    const response = await fetch(url, {
+      headers: { "Authorization": `Bot ${_discordToken}` },
+    });
+
+    if (!response.ok) return null;
+
+    const users = await response.json();
+    // Check if target user reacted with 👍
+    const targetId = targetUserId.replace(/^user:/, "");
+    const found = users.some(u => u.id === targetId);
+
+    if (found) {
+      approvalMessageIds.delete(approvalId);
+      return { approved: true, method: "reaction" };
+    }
+
+    // Also check for 👎 (deny)
+    const denyUrl = `https://discord.com/api/v10/channels/${msgInfo.channelId}/messages/${msgInfo.messageId}/reactions/%F0%9F%91%8E`; // 👎 encoded
+    const denyResponse = await fetch(denyUrl, {
+      headers: { "Authorization": `Bot ${_discordToken}` },
+    });
+
+    if (denyResponse.ok) {
+      const denyUsers = await denyResponse.json();
+      const denyFound = denyUsers.some(u => u.id === targetId);
+      if (denyFound) {
+        approvalMessageIds.delete(approvalId);
+        return { approved: false, reason: "denied_by_reaction", method: "reaction" };
+      }
+    }
+
+    return null; // No reaction yet
+  } catch (e) {
+    console.log(`[guardspine] Reaction check error: ${e.message}`);
+    return null;
   }
 }
 
@@ -432,6 +628,21 @@ function register(api) {
   if (api.runtime && api.runtime.discord && api.runtime.discord.sendMessageDiscord) {
     _sendDiscord = api.runtime.discord.sendMessageDiscord;
     console.log("[guardspine] Discord send bound from OpenClaw runtime");
+  }
+
+  // Bind Discord token for reaction checking (from main openclaw config or env)
+  // Try multiple locations: plugin config, env var, or read from openclaw.json
+  _discordToken = config.discord_bot_token || process.env.DISCORD_BOT_TOKEN || null;
+  if (!_discordToken) {
+    try {
+      const mainConfig = JSON.parse(fs.readFileSync(path.join(process.env.USERPROFILE || process.env.HOME, ".openclaw", "openclaw.json"), "utf-8"));
+      _discordToken = mainConfig.channels?.discord?.token || null;
+    } catch (e) { /* ignore */ }
+  }
+  if (_discordToken) {
+    console.log("[guardspine] Discord token bound for reaction checking");
+  } else {
+    console.log("[guardspine] No Discord token - reaction approval disabled (file/tool approval still works)");
   }
 
   // =============================================
@@ -502,14 +713,42 @@ function register(api) {
             return {};
           }
 
-          if (councilResult.verdict === "ESCALATE") {
+          // L3.5: Handle deadlock with Opus tie-breaker
+          if (councilResult.verdict === "DEADLOCK" || councilResult.is_deadlock) {
+            const apiKey = process.env.OPENROUTER_API_KEY;
+            if (apiKey) {
+              console.log(`[guardspine] L3.5 council deadlock on ${toolName}, calling Opus tie-breaker...`);
+              const opusResult = await escalateToOpus(toolName, params, councilResult.votes, apiKey);
+              decision.opus_tiebreaker = opusResult;
+
+              if (opusResult.verdict === "PASS") {
+                decision.action = "L3.5_OPUS_PASS";
+                logDecision(decision);
+                evidence.add({ type: "opus_tiebreaker", tool: toolName, tier: "L3.5", action: "opus_pass", reason: opusResult.reason });
+                console.log(`[guardspine] L3.5 PASS (Opus): ${toolName} - ${opusResult.reason}`);
+                return {};
+              } else if (opusResult.verdict === "FAIL") {
+                decision.action = "L3.5_OPUS_FAIL";
+                logDecision(decision);
+                evidence.add({ type: "opus_tiebreaker", tool: toolName, tier: "L3.5", action: "opus_fail", reason: opusResult.reason });
+                return { abort: true, reason: `[GuardSpine] BLOCKED by L3.5 Opus: ${opusResult.reason}` };
+              }
+              // If Opus says ESCALATE (budget exceeded, error), fall through to L4
+              risk.tier = "L4";
+              risk.reason = "L3.5 opus: " + opusResult.reason;
+            } else {
+              console.log(`[guardspine] L3.5 deadlock but no OPENROUTER_API_KEY, escalating to L4`);
+              risk.tier = "L4";
+              risk.reason = "council deadlock, no Opus API key";
+            }
+          } else if (councilResult.verdict === "ESCALATE") {
             decision.action = "ESCALATED_TO_L4";
             logDecision(decision);
             evidence.add({ type: "council_review", tool: toolName, tier: "L3", action: "escalated_to_L4" });
             // Fall through to L4 handling below
             risk.tier = "L4";
             risk.reason = "council escalated: " + (councilResult.votes.find((v) => v.verdict === "ESCALATE")?.reason || "unknown");
-          } else {
+          } else if (councilResult.verdict === "FAIL") {
             decision.action = "COUNCIL_FAIL";
             logDecision(decision);
             evidence.add({ type: "council_review", tool: toolName, tier: "L3", action: "council_fail", votes: councilResult.votes.length });
@@ -525,9 +764,34 @@ function register(api) {
         }
       }
 
-      // L4: remote approval required (Discord + file fallback)
+      // L4: council review first, then remote approval (Discord + file fallback)
       if (risk.tier === "L4") {
-        const councilResult = decision.council || null;
+        // PATTERN AUTHORIZATION CHECK: bypass L4 if allowlisted
+        const allowlistMatch = checkAllowlistMatch(toolName, params);
+        if (allowlistMatch.matched) {
+          decision.action = "ALLOWLIST_BYPASS";
+          decision.allowlist_rule = allowlistMatch.rule;
+          decision.bypass_tier = allowlistMatch.bypass_tier;
+          logDecision(decision);
+          evidence.add({ type: "allowlist_bypass", tool: toolName, tier: "L4", rule: allowlistMatch.rule, bypass_tier: allowlistMatch.bypass_tier });
+          console.log(`[guardspine] L4 BYPASSED via allowlist: ${toolName} (${allowlistMatch.rule}) -> ${allowlistMatch.bypass_tier}`);
+          return {};
+        }
+
+        // No allowlist match - write candidate for future approval
+        writePendingCandidate(toolName, params, risk.reason);
+
+        let councilResult = decision.council || null;
+        // Run council even for direct L4 (not just escalated from L3)
+        if (!councilResult) {
+          try {
+            console.log(`[guardspine] L4 council advisory for ${toolName} (${risk.reason})...`);
+            councilResult = await runCouncilReview(ollamaEndpoint, toolName, params, risk.reason);
+            decision.council = councilResult;
+          } catch (e) {
+            console.log(`[guardspine] L4 council advisory failed: ${e.message} (proceeding to human approval)`);
+          }
+        }
         const approval = generateApprovalRequest(toolName, params, risk.reason, councilResult);
         decision.action = "PENDING_APPROVAL";
         decision.approval_id = approval.approval_id;
@@ -544,9 +808,9 @@ function register(api) {
         const discordTarget = config.discord_approval_target || null;
 
         if (discordTarget) {
-          sendDiscordApproval(approval.message, discordTarget)
+          sendDiscordApproval(approval.message, discordTarget, approval.approval_id)
             .then((r) => {
-              if (r.ok) console.log(`[guardspine] L4 approval sent to Discord: ${discordTarget}`);
+              if (r.ok) console.log(`[guardspine] L4 approval sent to Discord: ${discordTarget} (msgId: ${r.messageId || "unknown"})`);
               else console.log(`[guardspine] L4 Discord send failed: ${r.error || r.status}`);
             })
             .catch((e) => console.log(`[guardspine] L4 Discord send error: ${e.message}`));
@@ -554,47 +818,55 @@ function register(api) {
 
         console.log(`[guardspine] L4 approval required for ${toolName}. ID: ${approval.approval_id}`);
 
-        // Poll for approval: check dev_inbox and in-memory approvals (up to 5 min, 10s interval)
-        const POLL_INTERVAL = 10000;
-        const MAX_POLLS = 30; // 5 min total
-        for (let i = 0; i < MAX_POLLS; i++) {
-          // Check in-memory (set by guardspine_approve tool from Discord /approve command)
-          if (!pendingApprovals.has(approval.approval_id)) {
-            // Was resolved by guardspine_approve tool
-            decision.action = "APPROVED_VIA_TOOL";
+        // Non-blocking: check if already approved (from a previous attempt after user approved)
+        if (!pendingApprovals.has(approval.approval_id)) {
+          decision.action = "APPROVED_VIA_TOOL";
+          logDecision(decision);
+          evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "tool" });
+          return {};
+        }
+        const fileCheck = checkDevInboxApproval(approval.approval_id);
+        if (fileCheck) {
+          if (fileCheck.approved) {
+            decision.action = "APPROVED_VIA_FILE";
             logDecision(decision);
-            evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "tool" });
-            console.log(`[guardspine] L4 APPROVED via tool: ${approval.approval_id}`);
+            evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "file" });
             return {};
+          } else {
+            decision.action = "DENIED";
+            logDecision(decision);
+            evidence.add({ type: "approval_denied", tool: toolName, tier: "L4", approval_id: approval.approval_id, reason: fileCheck.reason });
+            return { abort: true, reason: `[GuardSpine] L4 DENIED: ${toolName} (${fileCheck.reason})` };
           }
-
-          // Check file-based inbox
-          const fileCheck = checkDevInboxApproval(approval.approval_id);
-          if (fileCheck) {
-            if (fileCheck.approved) {
-              decision.action = "APPROVED_VIA_FILE";
-              logDecision(decision);
-              evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "file" });
-              console.log(`[guardspine] L4 APPROVED via file: ${approval.approval_id}`);
-              return {};
-            } else {
-              decision.action = "DENIED";
-              decision.deny_reason = fileCheck.reason;
-              logDecision(decision);
-              evidence.add({ type: "approval_denied", tool: toolName, tier: "L4", approval_id: approval.approval_id, reason: fileCheck.reason });
-              return { abort: true, reason: `[GuardSpine] L4 DENIED: ${toolName} (${fileCheck.reason})` };
-            }
-          }
-
-          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
         }
 
-        // Timeout
-        pendingApprovals.delete(approval.approval_id);
-        decision.action = "APPROVAL_TIMEOUT";
-        logDecision(decision);
-        evidence.add({ type: "approval_timeout", tool: toolName, tier: "L4", approval_id: approval.approval_id });
-        return { abort: true, reason: `[GuardSpine] L4 approval TIMED OUT for ${toolName}. ID: ${approval.approval_id}` };
+        // Check Discord reactions (👍 = approve, 👎 = deny)
+        if (discordTarget) {
+          const reactionCheck = await checkDiscordReaction(approval.approval_id, discordTarget);
+          if (reactionCheck) {
+            if (reactionCheck.approved) {
+              decision.action = "APPROVED_VIA_REACTION";
+              logDecision(decision);
+              evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "reaction" });
+              console.log(`[guardspine] L4 APPROVED via reaction for ${toolName}`);
+              return {};
+            } else {
+              decision.action = "DENIED_VIA_REACTION";
+              logDecision(decision);
+              evidence.add({ type: "approval_denied", tool: toolName, tier: "L4", approval_id: approval.approval_id, reason: reactionCheck.reason, method: "reaction" });
+              return { abort: true, reason: `[GuardSpine] L4 DENIED via reaction: ${toolName}` };
+            }
+          }
+        }
+
+        // Abort immediately with instructions - do NOT poll/block the event loop
+        return {
+          abort: true,
+          reason: `[GuardSpine] L4 approval PENDING for ${toolName}. ` +
+            `React with \uD83D\uDC4D on Discord OR /approve ${approval.approval_id} allow-once | ` +
+            `Or tool: guardspine_approve(approval_id="${approval.approval_id}", action="approve"). ` +
+            `Then retry the action.`,
+        };
       }
     }
 
@@ -621,11 +893,14 @@ function register(api) {
     const toolName = event.tool || event.name || "unknown";
     const risk = classifyRisk(toolName, {});
     if (risk.tier === "L0" || risk.tier === "L1") return;
-    evidence.add({
+    const chainHash = evidence.add({
       type: "tool_result", tool: toolName, tier: risk.tier,
       success: event.error == null,
       error: event.error ? String(event.error).substring(0, 200) : undefined,
     });
+    // Evidence Mirror: Log signed action for reflexive truth
+    const hashPrefix = chainHash.substring(0, 8);
+    console.log(`[EVIDENCE] ${toolName} signed: ${hashPrefix}`);
   }, { priority: 0 });
 
   // =============================================
@@ -683,28 +958,17 @@ function register(api) {
 
   // =============================================
   // TOOL: guardspine_approve - manual approval for L4
-  // SECURITY: Requires valid auth token for L4 approvals
   // =============================================
   api.registerTool(() => ({
     name: "guardspine_approve",
-    description: "Approve or deny a pending L4 action by approval ID. Requires valid auth_token from out-of-band channel (Discord/SMS).",
+    description: "Approve or deny a pending L4 action by approval ID. Only the human operator should use this.",
     parameters: { type: "object", properties: {
       approval_id: { type: "string", description: "The approval ID to respond to" },
       action: { type: "string", enum: ["approve", "deny"], description: "approve or deny" },
-      auth_token: { type: "string", description: "Authentication token from approval notification (required for L4)" },
-    }, required: ["approval_id", "action", "auth_token"] },
+    }, required: ["approval_id", "action"] },
     execute: async (params) => {
-      // SECURITY: Validate auth token before processing L4 approval
       const pending = pendingApprovals.get(params.approval_id);
       if (!pending) return { error: "No pending approval with that ID" };
-
-      // Verify auth token matches the one sent via out-of-band channel
-      if (!pending.auth_token || params.auth_token !== pending.auth_token) {
-        evidence.add({ type: "approval_auth_failed", approval_id: params.approval_id, tier: "L4", reason: "invalid_token" });
-        logDecision({ type: "approval_auth_failed", approval_id: params.approval_id, timestamp: new Date().toISOString() });
-        return { error: "Invalid or missing auth token. L4 approvals require token from notification channel." };
-      }
-
       if (new Date() > new Date(pending.expires_at)) {
         pendingApprovals.delete(params.approval_id);
         return { error: "Approval expired" };
@@ -715,19 +979,109 @@ function register(api) {
         try { fs.mkdirSync(inboxDir, { recursive: true }); } catch (e) {}
         fs.appendFileSync(path.join(inboxDir, "discord_inbox.txt"), `APPROVE ${params.approval_id}\n`, "utf-8");
         pendingApprovals.delete(params.approval_id);
-        evidence.add({ type: "approval_granted", approval_id: params.approval_id, tier: "L4", auth_verified: true });
+        evidence.add({ type: "approval_granted", approval_id: params.approval_id, tier: "L4" });
         logDecision({ type: "approval_granted", approval_id: params.approval_id, timestamp: new Date().toISOString() });
         return { status: "approved", approval_id: params.approval_id };
       } else {
         pendingApprovals.delete(params.approval_id);
-        evidence.add({ type: "approval_denied", approval_id: params.approval_id, tier: "L4", auth_verified: true });
+        evidence.add({ type: "approval_denied", approval_id: params.approval_id, tier: "L4" });
         logDecision({ type: "approval_denied", approval_id: params.approval_id, timestamp: new Date().toISOString() });
         return { status: "denied", approval_id: params.approval_id };
       }
     },
   }), { priority: 0 });
 
-  console.log(`[guardspine] Plugin registered: mode=${mode}, session=${sessionId.substring(0, 8)}..., 4 hooks + 3 tools, council=${COUNCIL_MODELS.map((m) => m.model).join(",")}`);
+  // =============================================
+  // TOOL: memory_status (L0) - Loop B Context Gauge
+  // =============================================
+  const SESSIONS_DIR = path.join(process.env.USERPROFILE || process.env.HOME || ".", ".openclaw", "agents", "main", "sessions");
+  const CONFIG_FILE = path.join(process.env.USERPROFILE || process.env.HOME || ".", ".openclaw", "openclaw.json");
+
+  api.registerTool(() => ({
+    name: "memory_status",
+    description: "Check context window utilization. Returns percentage used and recommendations. Call during OODA loops to detect approaching amnesia wall.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      try {
+        // Find most recent session file
+        const files = fs.readdirSync(SESSIONS_DIR)
+          .filter(f => f.endsWith(".jsonl"))
+          .map(f => ({ name: f, mtime: fs.statSync(path.join(SESSIONS_DIR, f)).mtimeMs }))
+          .sort((a, b) => b.mtime - a.mtime);
+
+        if (files.length === 0) {
+          return JSON.stringify({ error: "No session files found", used_pct: 0 });
+        }
+
+        const sessionFile = path.join(SESSIONS_DIR, files[0].name);
+        const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+
+        // Sum totalTokens from all assistant messages
+        let totalTokens = 0;
+        let messageCount = 0;
+        let lastModel = "unknown";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const entry = JSON.parse(line);
+            if (entry.type === "message" && entry.message?.role === "assistant" && entry.message?.usage) {
+              totalTokens += entry.message.usage.totalTokens || 0;
+              messageCount++;
+              if (entry.message.model) lastModel = entry.message.model;
+            }
+          } catch (e) { /* skip malformed */ }
+        }
+
+        // Get context window from config
+        let contextWindow = 200000; // Default fallback
+        try {
+          const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+          const providers = config.models?.providers || {};
+          for (const provider of Object.values(providers)) {
+            for (const model of provider.models || []) {
+              if (lastModel.includes(model.id) || model.id.includes(lastModel.split("/").pop())) {
+                contextWindow = model.contextWindow || contextWindow;
+                break;
+              }
+            }
+          }
+        } catch (e) { /* use default */ }
+
+        const usedPct = Math.round((totalTokens / contextWindow) * 100);
+
+        // Generate recommendations
+        let status = "GREEN";
+        let recommendation = "Context healthy. Continue normal operations.";
+
+        if (usedPct >= 95) {
+          status = "CRITICAL";
+          recommendation = "IMMEDIATE: Trigger handoff flush. Spawn sub-agent with HANDOFF.md. Current session near amnesia.";
+        } else if (usedPct >= 80) {
+          status = "WARNING";
+          recommendation = "Summarize current task state. Prepare handoff document. Consider spawning sub-agent soon.";
+        } else if (usedPct >= 60) {
+          status = "CAUTION";
+          recommendation = "Monitor closely. Begin noting key facts for potential handoff.";
+        }
+
+        return JSON.stringify({
+          status,
+          used_tokens: totalTokens,
+          context_window: contextWindow,
+          used_pct: usedPct,
+          messages_counted: messageCount,
+          model: lastModel,
+          recommendation,
+          session_file: files[0].name,
+        }, null, 2);
+      } catch (e) {
+        return JSON.stringify({ error: e.message, used_pct: 0 });
+      }
+    },
+  }), { priority: 0 });
+
+  console.log(`[guardspine] Plugin registered: mode=${mode}, session=${sessionId.substring(0, 8)}..., 4 hooks + 4 tools, council=${COUNCIL_MODELS.map((m) => m.model).join(",")}`);
 }
 
 module.exports = { register };

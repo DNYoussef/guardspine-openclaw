@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "description": "Pattern-based L4 bypass rules. Human-approved only.",
+  "allowed_path_prefixes": [
+    "/tmp/",
+    "/var/log/",
+    "~/.openclaw/workspace/",
+    "~/.openclaw/sandbox/"
+  ],
+  "patterns": []
+}

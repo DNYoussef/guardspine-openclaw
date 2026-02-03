@@ -1,0 +1,4 @@
+{
+  "description": "Pending pattern authorizations. Move to guardspine-allowlist.json to approve.",
+  "pending": []
+}

@@ -1,8 +1,8 @@
 {
   "id": "guardspine",
   "name": "GuardSpine Governance",
-  "version": "1.0.0",
-  "description": "Deny-by-default governance layer for OpenClaw. Gates all dangerous tool calls (bash, file write, download) through L0-L4 risk tiers with evidence packs, council review, and remote approval.",
+  "version": "2.1.0",
+  "description": "Deny-by-default governance layer for OpenClaw. Gates dangerous tool calls through L0-L4 risk tiers with evidence packs, 3-model council review, L3.5 Opus tie-breaker, pattern authorization bypass, and remote approval. Includes memory_status context gauge for amnesia detection.",
   "configSchema": {
     "type": "object",
     "properties": {
