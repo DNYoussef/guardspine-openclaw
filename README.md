@@ -1,6 +1,8 @@
 # guardspine-openclaw
 
-Deny-by-default governance plugin for [OpenClaw](https://github.com/nickarora/openclaw). Gates every tool call through L0-L4 risk tiers with hash-chained evidence packs, a 3-model local council, and remote human approval.
+OpenClaw integration plugin for [GuardSpine](https://github.com/DNYoussef/GuardSpine) - the unified governance and evidence system for AI-assisted work.
+
+This plugin brings GuardSpine's deny-by-default governance to [OpenClaw](https://github.com/nickarora/openclaw) agents. Gates every tool call through L0-L4 risk tiers with hash-chained evidence packs, a 3-model local council, and remote human approval.
 
 ```
 User Request
@@ -130,6 +132,7 @@ This plugin connects to the broader GuardSpine ecosystem:
 
 | Repository | Purpose | Integration |
 |------------|---------|-------------|
+| [GuardSpine](https://github.com/DNYoussef/GuardSpine) | **Canonical product** - unified governance system | Core governance engine |
 | [guardspine-spec](https://github.com/DNYoussef/guardspine-spec) | Evidence bundle specification v1.0 | Evidence pack format |
 | [guardspine-verify](https://github.com/DNYoussef/guardspine-verify) | Offline CLI verification | Verify evidence packs offline |
 | [guardspine-kernel](https://github.com/DNYoussef/guardspine-kernel) | Verification engine | Seal and validate artifacts |

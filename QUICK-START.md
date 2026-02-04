@@ -1,10 +1,15 @@
-# GuardSpine Quick Start
+# GuardSpine for OpenClaw - Quick Start
 
-Get AI governance running in 5 minutes.
+Get AI governance running in OpenClaw in 5 minutes.
 
-## What is GuardSpine?
+## What is This?
 
-GuardSpine gates every AI tool call through risk tiers (L0-L4). Low-risk operations flow freely. High-risk operations require multi-model council votes. Critical operations need human approval.
+**[GuardSpine](https://github.com/DNYoussef/GuardSpine)** is a unified governance and evidence system for AI-assisted work. It makes every AI action attributable, reviewable, and defensible.
+
+**This repo (guardspine-openclaw)** is the OpenClaw integration plugin. It brings GuardSpine governance to OpenClaw agents, gating tool calls through risk tiers (L0-L4):
+- Low-risk operations flow freely
+- High-risk operations require multi-model council votes
+- Critical operations need human approval
 
 ## Prerequisites
 
@@ -153,10 +158,11 @@ GuardSpine adds these tools to your agent:
 
 ## Links
 
+- [GuardSpine](https://github.com/DNYoussef/GuardSpine) - The canonical governance product
 - [GuardSpine Spec](https://github.com/DNYoussef/guardspine-spec) - Protocol specification
-- [GuardSpine Kernel (TS)](https://github.com/DNYoussef/guardspine-kernel) - Hash chain library
+- [GuardSpine Kernel (TS)](https://github.com/DNYoussef/guardspine-kernel) - Hash chain library (reference)
 - [GuardSpine Kernel (Python)](https://github.com/DNYoussef/guardspine-kernel-py) - Python port
-- [OpenClaw](https://github.com/openclaw/openclaw) - The agent framework
+- [OpenClaw](https://github.com/openclaw/openclaw) - The agent framework this plugin integrates with
 
 ## License
 
