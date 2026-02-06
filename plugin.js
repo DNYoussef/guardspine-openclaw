@@ -68,12 +68,28 @@ class EvidencePack {
   constructor(sessionId) {
     this.sessionId = sessionId;
     this.entries = [];
-    this.prevHash = "0".repeat(64);
+    this.prevHash = "genesis";
   }
   add(entry) {
-    const contentHash = crypto.createHash("sha256").update(JSON.stringify(entry)).digest("hex");
-    const chainHash = crypto.createHash("sha256").update(this.prevHash + contentHash).digest("hex");
-    this.entries.push({ ...entry, timestamp: new Date().toISOString(), content_hash: contentHash, chain_hash: chainHash });
+    const sequence = this.entries.length;
+    const timestamp = new Date().toISOString();
+    const itemId = entry.item_id || `entry-${String(sequence).padStart(6, "0")}`;
+    const contentType = entry.content_type || `guardspine/openclaw/${entry.tier || "event"}`;
+
+    const contentHash = sha256Prefixed(canonicalJson(entry));
+    const chainInput = `${sequence}|${itemId}|${contentType}|${contentHash}|${this.prevHash}`;
+    const chainHash = sha256Prefixed(chainInput);
+
+    this.entries.push({
+      ...entry,
+      timestamp,
+      item_id: itemId,
+      content_type: contentType,
+      content_hash: contentHash,
+      previous_hash: this.prevHash,
+      sequence,
+      chain_hash: chainHash,
+    });
     this.prevHash = chainHash;
     return chainHash;
   }
@@ -82,7 +98,35 @@ class EvidencePack {
     for (const e of this.entries) { const t = e.tier || "unknown"; byTier[t] = (byTier[t] || 0) + 1; }
     return { session_id: this.sessionId, total_entries: this.entries.length, by_tier: byTier, chain_root: this.prevHash };
   }
-  toJSON() { return { session_id: this.sessionId, entries: this.entries, chain_root: this.prevHash }; }
+  toJSON() {
+    return {
+      session_id: this.sessionId,
+      entries: this.entries,
+      chain_root: this.prevHash,
+      immutability_proof: {
+        hash_chain: this.entries.map((e) => ({
+          sequence: e.sequence,
+          item_id: e.item_id,
+          content_type: e.content_type,
+          content_hash: e.content_hash,
+          previous_hash: e.previous_hash,
+          chain_hash: e.chain_hash,
+        })),
+        root_hash: this.prevHash,
+      },
+    };
+  }
+}
+
+function sha256Prefixed(input) {
+  return "sha256:" + crypto.createHash("sha256").update(input, "utf8").digest("hex");
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map((v) => canonicalJson(v)).join(",") + "]";
+  const keys = Object.keys(value).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalJson(value[k])).join(",") + "}";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -162,10 +206,11 @@ function checkAllowlistMatch(toolName, params) {
 
   // Check path prefixes for file-related tools
   if (toolName === "bash" || toolName === "apply_patch") {
-    const target = params.file || params.path || params.command || "";
+    const target = typeof params?.file === "string"
+      ? params.file
+      : (typeof params?.path === "string" ? params.path : "");
     for (const prefix of allowlist.allowed_path_prefixes || []) {
-      const expandedPrefix = prefix.replace(/^~/, process.env.USERPROFILE || process.env.HOME || "");
-      if (target.includes(expandedPrefix)) {
+      if (isPathWithinPrefix(target, prefix)) {
         return { matched: true, rule: "path_prefix:" + prefix, bypass_tier: "L1" };
       }
     }
@@ -191,6 +236,27 @@ function checkAllowlistMatch(toolName, params) {
   }
 
   return { matched: false };
+}
+
+function normalizeForPathCheck(input) {
+  if (typeof input !== "string" || !input.trim()) return null;
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const expanded = input.replace(/^~(?=$|[\\/])/, home);
+  try {
+    const resolved = path.resolve(expanded);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  } catch (e) {
+    return null;
+  }
+}
+
+function isPathWithinPrefix(targetPath, prefixPath) {
+  const target = normalizeForPathCheck(targetPath);
+  const prefix = normalizeForPathCheck(prefixPath);
+  if (!target || !prefix) return false;
+  if (target === prefix) return true;
+  const normalizedPrefix = prefix.endsWith(path.sep) ? prefix : prefix + path.sep;
+  return target.startsWith(normalizedPrefix);
 }
 
 function writePendingCandidate(toolName, params, reason) {
@@ -619,7 +685,7 @@ function checkDevInboxApproval(approvalId) {
 
 function register(api) {
   const config = api.pluginConfig || {};
-  const mode = config.enforcement_mode || "audit";
+  const mode = config.enforcement_mode || "enforce";
   const ollamaEndpoint = config.council_endpoint || "http://localhost:11434";
   const sessionId = crypto.randomUUID();
   const evidence = new EvidencePack(sessionId);

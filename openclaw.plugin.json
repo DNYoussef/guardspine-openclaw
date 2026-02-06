@@ -10,7 +10,7 @@
       "enforcement_mode": {
         "type": "string",
         "enum": ["enforce", "audit", "disabled"],
-        "default": "audit",
+        "default": "enforce",
         "description": "enforce = block unauthorized actions, audit = log but allow, disabled = no checks"
       },
       "council_endpoint": {
