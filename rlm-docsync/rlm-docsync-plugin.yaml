@@ -197,7 +197,7 @@ tools:
         type: "string"
         required: false
         description: "Path to MoltBot installation"
-        default: "${MOLTBOT_ROOT:-/home/david/moltbot}"
+        default: "${MOLTBOT_ROOT:-.}"
       
       - name: "claims_manifest"
         type: "string"
@@ -586,14 +586,14 @@ logging:
   
   # Evidence pack storage
   evidence_storage:
-    path: "${MOLTBOT_DATA:-/home/david/moltbot/data}/evidence_packs"
+    path: "${MOLTBOT_DATA:-./data}/evidence_packs"
     retention_days: 90
     compress: true
     index: true
   
   # Audit log (immutable)
   audit_log:
-    path: "${MOLTBOT_DATA:-/home/david/moltbot/data}/audit.log"
+    path: "${MOLTBOT_DATA:-./data}/audit.log"
     append_only: true
     include:
       - "tool_invocation"

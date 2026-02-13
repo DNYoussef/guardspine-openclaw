@@ -20,8 +20,8 @@
       },
       "guardspine_root": {
         "type": "string",
-        "default": "D:\\Projects\\GuardSpine",
-        "description": "Path to GuardSpine monorepo"
+        "default": "",
+        "description": "Path to GuardSpine monorepo (env: GUARDSPINE_ROOT)"
       },
       "discord_approval_target": {
         "type": "string",

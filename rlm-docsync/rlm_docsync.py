@@ -44,7 +44,7 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
-MOLTBOT_ROOT = os.getenv("MOLTBOT_ROOT", "/home/david/moltbot")
+MOLTBOT_ROOT = os.getenv("MOLTBOT_ROOT", str(Path(__file__).resolve().parent.parent))
 EVIDENCE_DIR = os.getenv("EVIDENCE_DIR", f"{MOLTBOT_ROOT}/data/evidence_packs")
 
 # Council models
