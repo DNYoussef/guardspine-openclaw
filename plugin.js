@@ -60,6 +60,44 @@ function classifyRisk(toolName, params) {
   return { tier: "L2", reason: "unclassified tool (default)" };
 }
 
+const VALID_ENFORCEMENT_MODES = new Set(["enforce", "shadow", "audit", "disabled"]);
+
+function isTruthyEnvValue(value) {
+  return typeof value === "string" && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function resolvePluginConfig(rawConfig = {}, env = process.env) {
+  const enabled = rawConfig.enabled !== false;
+  const mode = enabled ? (rawConfig.enforcement_mode || "enforce") : "disabled";
+
+  if (!VALID_ENFORCEMENT_MODES.has(mode)) {
+    throw new Error(`[guardspine] Invalid enforcement_mode: ${mode}`);
+  }
+
+  const configuredCouncilEndpoint =
+    typeof rawConfig.council_endpoint === "string" && rawConfig.council_endpoint.trim()
+      ? rawConfig.council_endpoint.trim()
+      : "";
+  const councilEndpoint = configuredCouncilEndpoint || (env.GUARDSPINE_COUNCIL_ENDPOINT || "").trim();
+  const allowAuditMode = isTruthyEnvValue(env.GUARDSPINE_ALLOW_AUDIT_MODE);
+  const allowDevInbox = isTruthyEnvValue(env.GUARDSPINE_ALLOW_DEV_INBOX);
+
+  if (mode === "audit" && !allowAuditMode) {
+    throw new Error("[guardspine] audit mode is development-only. Set GUARDSPINE_ALLOW_AUDIT_MODE=1 to opt in locally.");
+  }
+  if ((mode === "enforce" || mode === "shadow") && !councilEndpoint) {
+    throw new Error(`[guardspine] council_endpoint is required in ${mode} mode. No localhost fallback is allowed.`);
+  }
+
+  return {
+    mode,
+    councilEndpoint,
+    allowDevInbox,
+    discordApprovalTarget: rawConfig.discord_approval_target || env.GUARDSPINE_DISCORD_APPROVAL_TARGET || null,
+    discordBotToken: rawConfig.discord_bot_token || env.DISCORD_BOT_TOKEN || null,
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════
 // EVIDENCE PACK (hash-chained)
 // ═══════════════════════════════════════════════════════════════
@@ -221,10 +259,22 @@ function checkAllowlistMatch(toolName, params) {
     if (pattern.tool !== toolName) continue;
     if (pattern.expires_at && new Date(pattern.expires_at) < new Date()) continue;
 
-    // Match by param substring (simple but safe)
+    // Match by exact param value (prefix match on string values, recursive)
     if (pattern.param_match) {
-      const paramsStr = JSON.stringify(params);
-      if (paramsStr.includes(pattern.param_match)) {
+      const matchStr = pattern.param_match;
+      const matchesValue = (v) => {
+        if (typeof v === "string") {
+          return v === matchStr || v.startsWith(matchStr);
+        }
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          return Object.values(v).some(matchesValue);
+        }
+        if (Array.isArray(v)) {
+          return v.some(matchesValue);
+        }
+        return false;
+      };
+      if (Object.values(params || {}).some(matchesValue)) {
         return { matched: true, rule: "pattern:" + pattern.id, bypass_tier: pattern.bypass_tier || "L2" };
       }
     }
@@ -431,6 +481,8 @@ async function runCouncilReview(endpoint, toolName, params, reason) {
 
   return { verdict: finalVerdict, votes, pass_count: passCount, fail_count: failCount, escalate_count: escalateCount, is_deadlock: isDeadlock };
 }
+
+let _runCouncilReview = runCouncilReview;
 
 // ═══════════════════════════════════════════════════════════════
 // L3.5: OPUS TIE-BREAKER (called on council deadlock)
@@ -685,8 +737,10 @@ function checkDevInboxApproval(approvalId) {
 
 function register(api) {
   const config = api.pluginConfig || {};
-  const mode = config.enforcement_mode || "enforce";
-  const ollamaEndpoint = config.council_endpoint || "http://localhost:11434";
+  const resolvedConfig = resolvePluginConfig(config);
+  const mode = resolvedConfig.mode;
+  const councilEndpoint = resolvedConfig.councilEndpoint;
+  const allowDevInbox = resolvedConfig.allowDevInbox;
   const sessionId = crypto.randomUUID();
   const evidence = new EvidencePack(sessionId);
 
@@ -698,7 +752,7 @@ function register(api) {
 
   // Bind Discord token for reaction checking (from main openclaw config or env)
   // Try multiple locations: plugin config, env var, or read from openclaw.json
-  _discordToken = config.discord_bot_token || process.env.DISCORD_BOT_TOKEN || null;
+  _discordToken = resolvedConfig.discordBotToken || null;
   if (!_discordToken) {
     try {
       const mainConfig = JSON.parse(fs.readFileSync(path.join(process.env.USERPROFILE || process.env.HOME, ".openclaw", "openclaw.json"), "utf-8"));
@@ -708,7 +762,7 @@ function register(api) {
   if (_discordToken) {
     console.log("[guardspine] Discord token bound for reaction checking");
   } else {
-    console.log("[guardspine] No Discord token - reaction approval disabled (file/tool approval still works)");
+    console.log("[guardspine] No Discord token - reaction approval disabled");
   }
 
   // =============================================
@@ -718,6 +772,8 @@ function register(api) {
     const toolName = event.tool || event.name || "unknown";
     const params = event.params || event.input || {};
     const risk = classifyRisk(toolName, params);
+
+    if (mode === "disabled") return {};
 
     // Frozen path check
     if (toolName === "apply_patch" || toolName === "bash") {
@@ -754,6 +810,57 @@ function register(api) {
       return {};
     }
 
+    if (mode === "shadow") {
+      if (risk.tier === "L2") {
+        decision.action = "SHADOW_WOULD_ALLOW_WITH_EVIDENCE";
+        logDecision(decision);
+        evidence.add({ type: "shadow_decision", tool: toolName, tier: "L2", action: "would_allow_with_evidence" });
+        return {};
+      }
+
+      if (risk.tier === "L3") {
+        try {
+          const councilResult = await _runCouncilReview(councilEndpoint, toolName, params, risk.reason);
+          decision.council = councilResult;
+          decision.action = councilResult.verdict === "PASS" ? "SHADOW_WOULD_PASS" : "SHADOW_WOULD_BLOCK";
+          logDecision(decision);
+          evidence.add({ type: "shadow_decision", tool: toolName, tier: "L3", action: decision.action.toLowerCase(), verdict: councilResult.verdict });
+        } catch (e) {
+          decision.action = "SHADOW_WOULD_BLOCK";
+          decision.error = e.message;
+          logDecision(decision);
+          evidence.add({ type: "shadow_decision", tool: toolName, tier: "L3", action: "would_block", error: e.message });
+        }
+        return {};
+      }
+
+      if (risk.tier === "L4") {
+        try {
+          const councilResult = await _runCouncilReview(councilEndpoint, toolName, params, risk.reason);
+          decision.council = councilResult;
+          decision.action = resolvedConfig.discordApprovalTarget || allowDevInbox
+            ? "SHADOW_WOULD_REQUIRE_REMOTE_APPROVAL"
+            : "SHADOW_WOULD_BLOCK_NO_APPROVAL_CHANNEL";
+          logDecision(decision);
+          evidence.add({
+            type: "shadow_decision",
+            tool: toolName,
+            tier: "L4",
+            action: decision.action === "SHADOW_WOULD_REQUIRE_REMOTE_APPROVAL"
+              ? "would_require_remote_approval"
+              : "would_block_no_approval_channel",
+            verdict: councilResult.verdict,
+          });
+        } catch (e) {
+          decision.action = "SHADOW_WOULD_BLOCK";
+          decision.error = e.message;
+          logDecision(decision);
+          evidence.add({ type: "shadow_decision", tool: toolName, tier: "L4", action: "would_block", error: e.message });
+        }
+        return {};
+      }
+    }
+
     // Enforce mode
     if (mode === "enforce") {
       // L2: allow with evidence
@@ -768,7 +875,7 @@ function register(api) {
       if (risk.tier === "L3") {
         console.log(`[guardspine] L3 council review for ${toolName} (${risk.reason})...`);
         try {
-          const councilResult = await runCouncilReview(ollamaEndpoint, toolName, params, risk.reason);
+          const councilResult = await _runCouncilReview(councilEndpoint, toolName, params, risk.reason);
           decision.council = councilResult;
 
           if (councilResult.verdict === "PASS") {
@@ -830,7 +937,7 @@ function register(api) {
         }
       }
 
-      // L4: council review first, then remote approval (Discord + file fallback)
+      // L4: council review first, then remote approval (Discord + optional dev inbox)
       if (risk.tier === "L4") {
         // PATTERN AUTHORIZATION CHECK: bypass L4 if allowlisted
         const allowlistMatch = checkAllowlistMatch(toolName, params);
@@ -852,11 +959,25 @@ function register(api) {
         if (!councilResult) {
           try {
             console.log(`[guardspine] L4 council advisory for ${toolName} (${risk.reason})...`);
-            councilResult = await runCouncilReview(ollamaEndpoint, toolName, params, risk.reason);
+            councilResult = await _runCouncilReview(councilEndpoint, toolName, params, risk.reason);
             decision.council = councilResult;
           } catch (e) {
-            console.log(`[guardspine] L4 council advisory failed: ${e.message} (proceeding to human approval)`);
+            decision.action = "COUNCIL_ERROR";
+            decision.error = e.message;
+            logDecision(decision);
+            evidence.add({ type: "council_error", tool: toolName, tier: "L4", error: e.message });
+            return { abort: true, reason: `[GuardSpine] BLOCKED: L4 council unavailable (${e.message}). Default deny.` };
           }
+        }
+        const discordTarget = resolvedConfig.discordApprovalTarget;
+        if (!discordTarget && !allowDevInbox) {
+          decision.action = "NO_APPROVAL_CHANNEL";
+          logDecision(decision);
+          evidence.add({ type: "approval_channel_error", tool: toolName, tier: "L4", reason: "no_approval_channel_configured" });
+          return {
+            abort: true,
+            reason: "[GuardSpine] BLOCKED: no L4 approval channel configured. Configure discord_approval_target or explicitly enable GUARDSPINE_ALLOW_DEV_INBOX=1 for local development.",
+          };
         }
         const approval = generateApprovalRequest(toolName, params, risk.reason, councilResult);
         decision.action = "PENDING_APPROVAL";
@@ -864,15 +985,15 @@ function register(api) {
         logDecision(decision);
         evidence.add({ type: "approval_request", tool: toolName, tier: "L4", approval_id: approval.approval_id });
 
-        // Write approval request to dev_inbox (file fallback)
-        ensureLogDir();
-        const requestFile = path.join(LOG_DIR, "dev_inbox", `pending-${approval.approval_id}.txt`);
-        try { fs.mkdirSync(path.dirname(requestFile), { recursive: true }); } catch (e) {}
-        try { fs.writeFileSync(requestFile, approval.message, "utf-8"); } catch (e) {}
+        // Development-only local inbox fallback. Never enable this silently in enforced paths.
+        if (allowDevInbox) {
+          ensureLogDir();
+          const requestFile = path.join(LOG_DIR, "dev_inbox", `pending-${approval.approval_id}.txt`);
+          try { fs.mkdirSync(path.dirname(requestFile), { recursive: true }); } catch (e) {}
+          try { fs.writeFileSync(requestFile, approval.message, "utf-8"); } catch (e) {}
+        }
 
         // Send to Discord via OpenClaw runtime (non-blocking, best-effort)
-        const discordTarget = config.discord_approval_target || null;
-
         if (discordTarget) {
           sendDiscordApproval(approval.message, discordTarget, approval.approval_id)
             .then((r) => {
@@ -884,25 +1005,20 @@ function register(api) {
 
         console.log(`[guardspine] L4 approval required for ${toolName}. ID: ${approval.approval_id}`);
 
-        // Non-blocking: check if already approved (from a previous attempt after user approved)
-        if (!pendingApprovals.has(approval.approval_id)) {
-          decision.action = "APPROVED_VIA_TOOL";
-          logDecision(decision);
-          evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "tool" });
-          return {};
-        }
-        const fileCheck = checkDevInboxApproval(approval.approval_id);
-        if (fileCheck) {
-          if (fileCheck.approved) {
-            decision.action = "APPROVED_VIA_FILE";
-            logDecision(decision);
-            evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "file" });
-            return {};
-          } else {
-            decision.action = "DENIED";
-            logDecision(decision);
-            evidence.add({ type: "approval_denied", tool: toolName, tier: "L4", approval_id: approval.approval_id, reason: fileCheck.reason });
-            return { abort: true, reason: `[GuardSpine] L4 DENIED: ${toolName} (${fileCheck.reason})` };
+        if (allowDevInbox) {
+          const fileCheck = checkDevInboxApproval(approval.approval_id);
+          if (fileCheck) {
+            if (fileCheck.approved) {
+              decision.action = "APPROVED_VIA_FILE";
+              logDecision(decision);
+              evidence.add({ type: "approval_granted", tool: toolName, tier: "L4", approval_id: approval.approval_id, method: "file" });
+              return {};
+            } else {
+              decision.action = "DENIED";
+              logDecision(decision);
+              evidence.add({ type: "approval_denied", tool: toolName, tier: "L4", approval_id: approval.approval_id, reason: fileCheck.reason });
+              return { abort: true, reason: `[GuardSpine] L4 DENIED: ${toolName} (${fileCheck.reason})` };
+            }
           }
         }
 
@@ -929,8 +1045,7 @@ function register(api) {
         return {
           abort: true,
           reason: `[GuardSpine] L4 approval PENDING for ${toolName}. ` +
-            `React with \uD83D\uDC4D on Discord OR /approve ${approval.approval_id} allow-once | ` +
-            `Or tool: guardspine_approve(approval_id="${approval.approval_id}", action="approve"). ` +
+            `React with \uD83D\uDC4D on Discord OR use an external approver workflow for ${approval.approval_id}. ` +
             `Then retry the action.`,
         };
       }
@@ -947,7 +1062,7 @@ function register(api) {
       prependContext:
         "[GOVERNANCE] GuardSpine governance is active (mode: " + mode + "). " +
         "Dangerous actions are gated through L0-L4 risk tiers. " +
-        "L3 actions require 3-model council approval. L4 actions require remote human approval. " +
+        "L3 actions require 3-model council approval. L4 actions require remote human approval via an external channel. " +
         "If blocked, explain the block to the user and suggest safe alternatives.",
     };
   }, { priority: -500 });
@@ -1019,41 +1134,6 @@ function register(api) {
         if (params.tier_filter) lines = lines.filter((l) => l.tier === params.tier_filter);
         return { entries: lines.slice(-(params.limit || 20)), total: lines.length };
       } catch (e) { return { entries: [], total: 0 }; }
-    },
-  }), { priority: 0 });
-
-  // =============================================
-  // TOOL: guardspine_approve - manual approval for L4
-  // =============================================
-  api.registerTool(() => ({
-    name: "guardspine_approve",
-    description: "Approve or deny a pending L4 action by approval ID. Only the human operator should use this.",
-    parameters: { type: "object", properties: {
-      approval_id: { type: "string", description: "The approval ID to respond to" },
-      action: { type: "string", enum: ["approve", "deny"], description: "approve or deny" },
-    }, required: ["approval_id", "action"] },
-    execute: async (params) => {
-      const pending = pendingApprovals.get(params.approval_id);
-      if (!pending) return { error: "No pending approval with that ID" };
-      if (new Date() > new Date(pending.expires_at)) {
-        pendingApprovals.delete(params.approval_id);
-        return { error: "Approval expired" };
-      }
-      if (params.action === "approve") {
-        // Write to dev_inbox so next check picks it up
-        const inboxDir = path.join(LOG_DIR, "dev_inbox");
-        try { fs.mkdirSync(inboxDir, { recursive: true }); } catch (e) {}
-        fs.appendFileSync(path.join(inboxDir, "discord_inbox.txt"), `APPROVE ${params.approval_id}\n`, "utf-8");
-        pendingApprovals.delete(params.approval_id);
-        evidence.add({ type: "approval_granted", approval_id: params.approval_id, tier: "L4" });
-        logDecision({ type: "approval_granted", approval_id: params.approval_id, timestamp: new Date().toISOString() });
-        return { status: "approved", approval_id: params.approval_id };
-      } else {
-        pendingApprovals.delete(params.approval_id);
-        evidence.add({ type: "approval_denied", approval_id: params.approval_id, tier: "L4" });
-        logDecision({ type: "approval_denied", approval_id: params.approval_id, timestamp: new Date().toISOString() });
-        return { status: "denied", approval_id: params.approval_id };
-      }
     },
   }), { priority: 0 });
 
@@ -1147,7 +1227,26 @@ function register(api) {
     },
   }), { priority: 0 });
 
-  console.log(`[guardspine] Plugin registered: mode=${mode}, session=${sessionId.substring(0, 8)}..., 4 hooks + 4 tools, council=${COUNCIL_MODELS.map((m) => m.model).join(",")}`);
+  console.log(`[guardspine] Plugin registered: mode=${mode}, session=${sessionId.substring(0, 8)}..., 4 hooks + 3 tools, council=${COUNCIL_MODELS.map((m) => m.model).join(",")}, dev_inbox=${allowDevInbox ? "enabled" : "disabled"}`);
 }
 
-module.exports = { register };
+function resetForTests() {
+  pendingApprovals.clear();
+  approvalMessageIds.clear();
+  _sendDiscord = null;
+  _discordToken = null;
+  _runCouncilReview = runCouncilReview;
+}
+
+module.exports = {
+  register,
+  __internal: {
+    classifyRisk,
+    isTruthyEnvValue,
+    resolvePluginConfig,
+    resetForTests,
+    setCouncilReviewRunner(fn) {
+      _runCouncilReview = fn;
+    },
+  },
+};

@@ -73,15 +73,16 @@ In `~/.openclaw/openclaw.json`, add under `plugins`:
 ```json
 {
   "guardspine": {
-    "enforcement_mode": "audit",
-    "council_endpoint": "http://localhost:11434"
+    "enforcement_mode": "shadow",
+    "council_endpoint": "http://YOUR-EXPLICIT-OLLAMA-ENDPOINT"
   }
 }
 ```
 
 Modes:
-- `audit` - Log all decisions, block nothing (start here)
-- `enforce` - Active gating with council and approval
+- `shadow` - Run the full classification and council path, log what would happen, do not block
+- `enforce` - Active gating with council and external human approval
+- `audit` - Development-only pass-through. Requires `GUARDSPINE_ALLOW_AUDIT_MODE=1`
 - `disabled` - Plugin loaded but inactive
 
 ## How It Works
@@ -107,10 +108,10 @@ Each scores 5 dimensions (0-5): prompt injection resistance, blast radius, rever
 When a tool call hits L4, the plugin:
 
 1. **Sends a Discord DM** to the configured approver via OpenClaw's runtime API (`sendMessageDiscord`)
-2. **Writes a file** to `~/.openclaw/guardspine-logs/dev_inbox/` as fallback
-3. **Polls for 5 minutes** (10s intervals) checking both the `guardspine_approve` tool and the dev_inbox file
+2. **Optionally writes a local dev inbox file** only when `GUARDSPINE_ALLOW_DEV_INBOX=1`
+3. **Waits for an out-of-band approval** via Discord reaction or an explicitly enabled local dev workflow
 
-Approve via Discord: `/approve <id> allow-once` or use the `guardspine_approve` tool.
+Approve via Discord: `/approve <id> allow-once` or the configured external approval workflow. There is no in-band model approval tool.
 
 Configure the Discord target in `openclaw.json`:
 
@@ -147,7 +148,7 @@ This plugin connects to the broader GuardSpine ecosystem:
 
 ### `plugin.js` - Core Plugin
 
-The OpenClaw extension. Hooks into `before_tool_call`, `before_agent_start`, `after_tool_call`, and `agent_end`. Provides 3 tools: `guardspine_status`, `guardspine_audit_log`, `guardspine_approve`.
+The OpenClaw extension. Hooks into `before_tool_call`, `before_agent_start`, `after_tool_call`, and `agent_end`. Provides 3 tools: `guardspine_status`, `guardspine_audit_log`, `memory_status`.
 
 ### `evidence-evaluator/` - L3 Council Rubric
 
@@ -175,8 +176,8 @@ The OpenClaw extension. Hooks into `before_tool_call`, `before_agent_start`, `af
 cd ~/.openclaw/extensions
 git clone https://github.com/DNYoussef/guardspine-openclaw guardspine
 
-# 2. Start in audit mode (safe, logs only)
-# Edit openclaw.json: "guardspine": {"enforcement_mode": "audit"}
+# 2. Start in shadow mode
+# Edit openclaw.json: "guardspine": {"enforcement_mode": "shadow", "council_endpoint": "http://YOUR-EXPLICIT-OLLAMA-ENDPOINT"}
 
 # 3. Restart gateway
 openclaw gateway
@@ -190,7 +191,7 @@ pip install requests
 PYTHONIOENCODING=utf-8 python run_harness.py --quick
 
 # 6. When satisfied, switch to enforce mode
-# Edit openclaw.json: "guardspine": {"enforcement_mode": "enforce"}
+# Edit openclaw.json: "guardspine": {"enforcement_mode": "enforce", "council_endpoint": "http://YOUR-EXPLICIT-OLLAMA-ENDPOINT"}
 ```
 
 ## Tools Provided
@@ -199,7 +200,7 @@ PYTHONIOENCODING=utf-8 python run_harness.py --quick
 |------|-------------|
 | `guardspine_status` | Query governance mode, evidence summary, classify a tool's risk tier |
 | `guardspine_audit_log` | Read recent governance decisions with tier filtering |
-| `guardspine_approve` | Approve or deny a pending L4 action by approval ID |
+| `memory_status` | Check context window utilization and handoff risk |
 
 ## License
 

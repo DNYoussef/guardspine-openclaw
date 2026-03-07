@@ -70,8 +70,10 @@ openclaw gateway start
 
 You should see:
 ```
-[guardspine] Plugin registered: mode=enforce, 4 hooks + 4 tools
+[guardspine] Plugin registered: mode=enforce, 4 hooks + 3 tools
 ```
+
+To use `shadow` or `enforce`, set an explicit council endpoint in your plugin config. There is no silent localhost fallback.
 
 ## Step 6: Test It
 
@@ -115,7 +117,7 @@ To enable Discord-based human approval for L4:
 }
 ```
 
-3. Approve L4 requests by reacting with :thumbsup: or :thumbsdown:
+3. Approve L4 requests by reacting with :thumbsup: or :thumbsdown:. There is no in-band approval tool.
 
 ## Useful Tools
 
@@ -124,9 +126,8 @@ GuardSpine adds these tools to your agent:
 | Tool | Purpose |
 |------|---------|
 | `memory_status` | Check context window usage |
-| `request_approval` | Request human approval |
-| `submit_evidence` | Submit evidence for audit |
-| `check_governance` | Check current governance state |
+| `guardspine_status` | Check current governance state |
+| `guardspine_audit_log` | Read recent governance decisions |
 
 ## Troubleshooting
 

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "GuardSpine governance plugin for OpenClaw - deny-by-default tool gating with L0-L4 risk tiers, 3-model council, and evidence packs",
   "main": "plugin.js",
+  "scripts": {
+    "test": "node --test"
+  },
   "openclaw": {
     "extensions": ["plugin.js"]
   },

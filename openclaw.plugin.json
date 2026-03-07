@@ -9,14 +9,13 @@
       "enabled": { "type": "boolean", "default": true },
       "enforcement_mode": {
         "type": "string",
-        "enum": ["enforce", "audit", "disabled"],
+        "enum": ["enforce", "shadow", "audit", "disabled"],
         "default": "enforce",
-        "description": "enforce = block unauthorized actions, audit = log but allow, disabled = no checks"
+        "description": "enforce = block unauthorized actions, shadow = evaluate and log without blocking, audit = development-only pass-through, disabled = no checks"
       },
       "council_endpoint": {
         "type": "string",
-        "default": "http://localhost:11434",
-        "description": "Ollama endpoint for council models"
+        "description": "Required in shadow/enforce mode. Must point to an explicit Ollama-compatible council endpoint."
       },
       "guardspine_root": {
         "type": "string",
